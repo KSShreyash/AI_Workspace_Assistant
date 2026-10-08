@@ -41,19 +41,26 @@ async def test_extract_returns_parsed_json():
 
 
 @pytest.mark.asyncio
-async def test_extract_retries_once_on_rate_limit():
-    payload = {"people": [], "action_items": []}
+async def test_extract_does_not_retry_a_rate_limit():
+    """A 429 surfaces immediately rather than sleeping and trying again.
+
+    Replaces an earlier test that asserted a single retry after a fixed five
+    second sleep. That made sense against a per-minute burst limit, but the
+    binding limit on a free tier is tokens per DAY: a daily exhaustion stands
+    for hours, so sleeping briefly and retrying only spends a second request
+    against the same closed door. The caller records the provider's own
+    Retry-After instead and stops calling until it passes.
+    """
+    from app.services.openai_client import QuotaExhausted
+
     mock_client = MagicMock()
-    mock_client.chat.completions.create = AsyncMock(
-        side_effect=[_rate_limit_error(), _mock_response(payload)]
-    )
+    mock_client.chat.completions.create = AsyncMock(side_effect=_rate_limit_error())
 
-    with patch("app.services.openai_client._client", new=mock_client), \
-         patch("app.services.openai_client.asyncio.sleep", new=AsyncMock()):
-        result = await extract("content", [])
+    with patch("app.services.openai_client._client", new=mock_client):
+        with pytest.raises(QuotaExhausted):
+            await extract("content", [])
 
-    assert result == payload
-    assert mock_client.chat.completions.create.call_count == 2
+    assert mock_client.chat.completions.create.call_count == 1
 
 
 def test_client_is_a_single_shared_instance_not_a_per_call_factory():

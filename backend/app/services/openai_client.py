@@ -1,11 +1,59 @@
-import asyncio
 import json
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Literal
 
 from openai import AsyncOpenAI, RateLimitError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.config import settings
+
+
+class QuotaExhausted(Exception):
+    """The provider refused the call because its quota is spent.
+
+    Distinct from an extraction failure: the message is fine and should be tried
+    again later, so callers must not count it as an attempt against that row.
+    """
+
+    def __init__(self, retry_after_seconds: float):
+        super().__init__(f"provider quota exhausted; retry after {retry_after_seconds:.0f}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
+# Used when the provider sends no usable Retry-After. Long enough not to hammer,
+# short enough that a brief per-minute limit recovers without waiting out a day.
+_DEFAULT_RETRY_AFTER_SECONDS = 900.0
+
+
+def _retry_after_seconds(exc: RateLimitError) -> float:
+    """Read the provider's own backoff from a 429.
+
+    RFC 9110 allows Retry-After to be either a delay in seconds or an HTTP-date.
+    float() on the date form raises ValueError, which would turn a recoverable
+    rate limit into a crash, so both forms are handled and anything unparseable
+    falls back to the default.
+    """
+    response = getattr(exc, "response", None)
+    raw = None
+    if response is not None:
+        raw = response.headers.get("retry-after")
+    if not raw:
+        return _DEFAULT_RETRY_AFTER_SECONDS
+
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        pass
+
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_RETRY_AFTER_SECONDS
+
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(1.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 class ExtractedPerson(BaseModel):
@@ -159,11 +207,13 @@ async def extract(content: str, participants: list[dict]) -> dict:
         response = await _client.chat.completions.create(
             model=settings.llm_model, messages=messages, response_format=_SCHEMA
         )
-    except RateLimitError:
-        await asyncio.sleep(5)
-        response = await _client.chat.completions.create(
-            model=settings.llm_model, messages=messages, response_format=_SCHEMA
-        )
+    except RateLimitError as exc:
+        # Deliberately no sleep-and-retry here. The previous fixed 5s retry made
+        # sense for a per-minute burst limit, but the binding limit on a free
+        # tier is tokens per DAY - sleeping five seconds and trying again just
+        # spends another request against a wall that stands for hours. Surface
+        # it instead and let the caller record the backoff.
+        raise QuotaExhausted(_retry_after_seconds(exc)) from exc
     raw = response.choices[0].message.content
     if raw is None:
         # A refusal (or a safety stop) returns no content. json.loads(None)

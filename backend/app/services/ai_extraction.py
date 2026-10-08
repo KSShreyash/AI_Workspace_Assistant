@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from html import unescape
 
 import asyncpg
@@ -10,8 +10,10 @@ import asyncpg
 from app.core.config import settings
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
+from app.repositories.llm_quota import LlmQuotaRepository
 from app.repositories.profiles import ProfilesRepository
 from app.services import openai_client
+from app.services.openai_client import QuotaExhausted
 from app.services.extraction_filter import should_extract
 
 logger = logging.getLogger(__name__)
@@ -219,6 +221,10 @@ async def _extract_pending_emails(
                 pool, user_id, "email", row["id"], content,
                 [(row["from_address"], None)], own_email,
             )
+        except QuotaExhausted:
+            # Not this message's fault. Leave it pending with its attempt count
+            # untouched and stop the run - every further call would fail too.
+            raise
         except Exception as exc:
             await _record_extraction_failure(pool, table, row["id"], exc)
             continue
@@ -272,6 +278,10 @@ async def _extract_pending_calendar_events(
             participants = list(by_email.values()) + no_email
 
             await _process_item(pool, user_id, "calendar_event", row["id"], content, participants, own_email)
+        except QuotaExhausted:
+            # Not this message's fault. Leave it pending with its attempt count
+            # untouched and stop the run - every further call would fail too.
+            raise
         except Exception as exc:
             await _record_extraction_failure(pool, table, row["id"], exc)
             continue
@@ -309,6 +319,10 @@ async def _extract_pending_chat_messages(
                 pool, user_id, "chat_message", row["id"], content,
                 [(None, row["from_user"])], own_email,
             )
+        except QuotaExhausted:
+            # Not this message's fault. Leave it pending with its attempt count
+            # untouched and stop the run - every further call would fail too.
+            raise
         except Exception as exc:
             await _record_extraction_failure(pool, table, row["id"], exc)
             continue
@@ -317,6 +331,15 @@ async def _extract_pending_chat_messages(
 
 
 async def extract_user(pool: asyncpg.Pool, user_id: uuid.UUID, limit: int | None) -> None:
+    quota = LlmQuotaRepository(pool)
+
+    if await quota.is_exhausted():
+        # Return before touching anything. The sync cron fires every fifteen
+        # minutes and a daily exhaustion lasts hours, so the alternative is
+        # spending the night issuing requests that can only fail.
+        logger.info("Skipping extraction for user %s: provider quota exhausted", user_id)
+        return
+
     profile = await ProfilesRepository(pool).get(user_id)
     own_email = profile["email"] if profile else None
 
@@ -324,6 +347,14 @@ async def extract_user(pool: asyncpg.Pool, user_id: uuid.UUID, limit: int | None
     for scan_fn in (_extract_pending_emails, _extract_pending_calendar_events, _extract_pending_chat_messages):
         if remaining is not None and remaining <= 0:
             break
-        processed = await scan_fn(pool, user_id, own_email, remaining)
+        try:
+            processed = await scan_fn(pool, user_id, own_email, remaining)
+        except QuotaExhausted as exc:
+            until = datetime.now(timezone.utc) + timedelta(seconds=exc.retry_after_seconds)
+            await quota.mark_exhausted(until)
+            logger.warning(
+                "Provider quota exhausted; pausing extraction until %s", until.isoformat()
+            )
+            return
         if remaining is not None:
             remaining -= processed
