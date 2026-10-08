@@ -32,8 +32,10 @@ does not invalidate it. Credentials live separately in `~/.claude/settings.json`
   regenerable from this repo — the findings are summarised in §8.
 - MCP/plugin auth (the Supabase plugin) must be re-authorised.
 
-**To resume with no history at all:** this document plus §8 is sufficient to execute
-the work cold. Start at §9.
+**To resume with no history at all:** this document is sufficient to execute the work
+cold. **Start at §11 (Environments)** — nothing can be built or verified until the stack
+runs, and as of 2026-10-08 every deployed piece is down. Then §9 for sequencing, §5.8
+for the collisions to avoid, and §8 for the audit findings being fixed.
 
 ---
 
@@ -939,8 +941,10 @@ service-role tables.
 ## 9. Sequencing
 
 ```
-Job 0  Provision a new Supabase project; apply all 7 migrations; restore backend/.env
-       (nothing is verifiable until this is done)
+Job 0  Stand the stack back up - local AND deployed.          >> SEE §11 <<
+       Every deployed piece is currently down. This is not a one-liner;
+       it is four providers plus three external app registrations.
+       Nothing below is verifiable until local dev works.
    |
 Job 4a Palette + tokens + color-scheme           §7.8  <-- zero risk, ship anytime
        ~13 lines in globals.css. Independent of everything.
@@ -1028,5 +1032,206 @@ starting with job 1.
 |---|---|
 | 1 | Initial design. |
 | 2 | Added **§5.8**, a pre-flight list of 15 verified collisions between planned changes and existing code. Corrected **§5.4** (quota state cannot reuse `sync_state` — CHECK constraint). Rewrote **§5.5** (Graph `internetMessageHeaders` requires `$select` on single-message GET, so the filter now uses provider-native classification instead). Specified the batch/transaction boundary in **§5.6**. Renamed `llm_batch_size` → `llm_messages_per_call` to avoid collision with the existing `extraction_batch_limit`. |
+| 5 | Added **§11, Environments** — how to run the app locally and deployed. Job 0 was a one-line placeholder; verification showed **every deployed piece is down**: the Supabase project is deleted (HTTP 000 on REST and Auth), the Render service returns "suspended by its owner", and Cloudflare Pages is not serving. §11 covers local setup via the Supabase CLI on Docker (which also makes the 132 erroring tests hermetic), production setup across four providers, the OAuth redirect matrix — the two-places-two-different-URLs trap — a complete env-var reference, and a job-0 definition of done. Records the constraint that forces it: `profiles.id references auth.users(id)`, so DB and Auth must be the same Supabase instance and cannot be mixed. |
 | 4 | **Name resolved: "AI Workspace Assistant"** (not the mockup's "Candoor") — §7.9 now lists the four one-line code strings, and warns that the three remaining `ai-relationship-manager` strings are **live infrastructure**, not branding: renaming the Render service breaks the cron URL, which fails silently under `curl -sf`. **Re-ordered §7.8/§9** — an earlier draft deferred all dashboard work until after job 2; only the *Emails page* actually needs multi-account, so the dashboard aggregates now land before job 2, giving a demo-able product ahead of the riskiest job. Removed a duplicated Q1 gate. Added the Insights-scope question to §10. |
 | 3 | Added **job 4** (**§7**) from the supplied dashboard mockup and parallax assets: new 7-item IA, warm-light reskin, four new pages, charts, parallax hero. Key findings — the reskin itself is ~13 lines because no component hardcodes a colour (verified), but the dashboard needs data the backend does not produce; the Task/Meeting/FYI chips are derivable at **zero LLM cost** (§7.4); and `action_item.category` **must be added during job 1** or job 4 forces a full re-extraction (§7.5, now reflected in §5.3). Job 4 absorbs five audit findings (§7.6). **§9** sequencing rewritten to interleave job 4. |
+
+---
+
+## 11. Environments — running locally and on the internet
+
+Added 2026-10-08. Job 0 previously read "provision a new Supabase project". That
+understated it considerably.
+
+### 11.1 Verified current state
+
+| Piece | State (checked 2026-10-08) | Action |
+|---|---|---|
+| Supabase project `fmzbuhyguxgxodymmojm` | **Deleted.** REST and Auth both return HTTP 000 — DNS does not resolve. | Create new |
+| Render backend | **Suspended.** Returns `"This service has been suspended by its owner."` | Resume or recreate |
+| Cloudflare Pages | Not serving. | Redeploy |
+| `backend/.env` | All 10 keys populated — but `DATABASE_URL` / `SUPABASE_URL` point at the deleted project. | Repoint |
+| `frontend/.env.local` | All 3 keys populated, same problem. | Repoint |
+| `backend/.venv` | Absolute paths from a previous folder location (§8.7/22). | Recreate |
+| Backend test suite | 132 of 173 error — they open a real connection to the dead project. | §11.7 fixes this |
+
+**Local tooling present:** Docker 28.3.2, Node 22.13.1, npm 10.9.2, Python 3.11.9,
+gh 2.100.0, git 2.46. **Missing:** the Supabase CLI.
+
+### 11.2 The constraint that shapes the whole setup
+
+`profiles.id` is declared `references auth.users(id)`
+(`20260715000000_foundation_schema.sql:4`). **The application database and the Auth
+service must therefore be the same Supabase instance.** A tempting hybrid — local
+Postgres for speed, cloud Supabase for real OAuth — is impossible: user IDs minted by
+cloud Auth would violate a foreign key against a local `auth.users`.
+
+Reinforcing this, `deps.py:13` builds its JWKS URL from `settings.supabase_url`, so JWT
+verification also follows whichever instance is configured.
+
+**Consequence: two self-consistent environments, never mixed.**
+
+```
+LOCAL         supabase CLI (Docker)  ->  Postgres + Auth + Studio on localhost
+PRODUCTION    cloud Supabase project ->  Postgres + Auth
+```
+
+### 11.3 Local setup
+
+**Why local Supabase rather than a second cloud project:** it makes the test suite
+hermetic. Those 132 erroring tests are the single largest obstacle to doing jobs 1-4
+safely, and they stay broken as long as they need a remote database. Docker is already
+installed, so this costs one `npm i -D supabase`.
+
+```bash
+# 1. Supabase CLI + local stack (Postgres, Auth/GoTrue, Studio)
+cd "C:\Drive D\College\Projects\AI Workspace Assistant"
+npm i -D supabase
+npx supabase init          # creates supabase/config.toml; migrations/ already exists
+npx supabase start         # prints API URL, anon key, service_role key, DB URL
+
+# 2. Apply all migrations to the local DB
+npx supabase db reset      # replays supabase/migrations/*.sql in order
+
+# 3. Backend venv - recreate, do not reuse (stale absolute paths, section 8.7/22)
+cd backend
+rm -rf .venv
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+
+# 4. Run backend + frontend
+.venv/Scripts/uvicorn app.main:app --reload --port 8000
+cd ../frontend && npm install && npm run dev        # http://localhost:3000
+```
+
+`supabase start` prints the local keys — they are fixed, well-known development values,
+not secrets. Put them in `backend/.env` and `frontend/.env.local` per §11.6.
+
+**Previewing the production build locally.** `next dev` works normally, but
+`next.config.ts` sets `output: "export"`, so `npm run build` emits static files to
+`out/` with no server. To check what actually ships:
+
+```bash
+npm run build && npx serve out
+```
+
+Several bugs — the hydration mismatches at §8.7/20 in particular — appear only in the
+exported build, never in dev.
+
+### 11.4 Production setup
+
+Four providers, in this order; each depends on the previous.
+
+**1. Supabase (new project)**
+
+- Create the project; record project ref, URL, anon key, service_role key
+- Apply migrations: `npx supabase link --project-ref <ref>` then `npx supabase db push`
+- Auth → Providers → enable **Azure**, paste the Azure client ID and secret
+- Auth → URL Configuration → add the redirect URLs from §11.5
+- **Enable manual identity linking** — job 2 depends on it (§6.3)
+
+**2. Render (backend)**
+
+- Resume the suspended service, or create a new one from `render.yaml`
+- **`render.yaml` cannot boot as committed.** It omits `SYNC_SECRET` and the LLM key
+  (§8.1/1, §5.8/P5). Fix the blueprint before deploying or the service crashes on
+  startup with a pydantic `ValidationError`.
+- Set every variable from §11.6 in the Render dashboard
+- Free tier spins down after ~15 minutes idle and cold-starts in tens of seconds
+
+**3. Cloudflare Pages (frontend)**
+
+- Root directory `frontend`, build command `npm run build`, output directory `out`
+- Set the three `NEXT_PUBLIC_*` variables. These are **inlined at build time**, so
+  changing one requires a rebuild, not a restart.
+- Record the deployed domain — it must appear in `CORS_ALLOW_ORIGINS` on Render
+
+**4. GitHub Actions (cron)**
+
+- Repo secret `SYNC_SECRET`, matching Render exactly
+- If the Render hostname changed, update `graph-sync-cron.yml:14` — the URL is
+  hardcoded, and `curl -sf` hides the resulting failure (§7.9, §8.4/10)
+
+### 11.5 The OAuth redirect matrix
+
+This is the part most often got wrong, because the URLs live in **two different places
+and are not the same URLs**. The flow is:
+
+```
+browser -> Supabase Auth -> Microsoft/Google -> Supabase callback -> app /callback
+```
+
+The provider redirects to **Supabase**; Supabase then redirects to **your app**.
+
+| Registered where | Local | Production |
+|---|---|---|
+| **Azure** → Redirect URIs | `http://localhost:54321/auth/v1/callback` | `https://<ref>.supabase.co/auth/v1/callback` |
+| **Google Cloud** → Authorised redirect URIs *(job 2)* | `http://localhost:54321/auth/v1/callback` | `https://<ref>.supabase.co/auth/v1/callback` |
+| **Supabase** → Auth → Redirect URLs | `http://localhost:3000/callback` | `https://<domain>/callback` |
+| **Supabase** → Auth → Site URL | `http://localhost:3000` | `https://<domain>` |
+
+The app side comes from `login/page.tsx:31` —
+`redirectTo: ${window.location.origin}/callback` — which follows whatever origin the
+browser is on, so **both** origins must be allow-listed in Supabase.
+
+**Google-specific (job 2):** request `access_type=offline` **and** `prompt=consent`, or
+no refresh token is issued and the connection dies after roughly an hour (§6.3). Enable
+the Gmail API on the Google Cloud project, and while the consent screen is in *Testing*
+status, add the account as a test user.
+
+**Microsoft personal accounts:** `MS_AUTHORITY` is already
+`https://login.microsoftonline.com/common`, which accepts both personal and work/school
+accounts. No change needed for the "personal accounts" requirement — though note that
+Teams chat sync has no personal-account equivalent, so `sync_chat` will mark itself
+`not_available` for those, which the existing code already handles
+(`graph_sync.py:151-154`).
+
+### 11.6 Environment variables — complete reference
+
+| Variable | Local value | Production location |
+|---|---|---|
+| `DATABASE_URL` | from `supabase start` | Render |
+| `SUPABASE_URL` | `http://localhost:54321` | Render |
+| `SUPABASE_SERVICE_ROLE_KEY` | from `supabase start` | Render |
+| `FERNET_KEY` | reuse the existing value | Render — **do not rotate.** Rotating makes every stored Graph token permanently undecryptable. |
+| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` | same Azure app | Render |
+| `MS_AUTHORITY` | `https://login.microsoftonline.com/common` | Render |
+| `CORS_ALLOW_ORIGINS` | `http://localhost:3000` | Render — add the Pages domain. **No space after the comma** (§8.6/19). |
+| `SYNC_SECRET` | any random string | Render **and** GitHub repo secret — must match |
+| `LLM_API_KEY` | Groq key (§5.1) | Render — **absent from `render.yaml` today** |
+| `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | Render |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | Render |
+| `NEXT_PUBLIC_SUPABASE_URL` | `http://localhost:54321` | Cloudflare Pages *(build-time)* |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | from `supabase start` | Cloudflare Pages *(build-time)* |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Cloudflare Pages *(build-time)* |
+
+`apiBaseUrl()` (`lib/api.ts:4`) applies a non-null assertion to
+`NEXT_PUBLIC_API_BASE_URL`. If it is unset at build time, every request throws
+`undefined.trim()` at runtime with no useful message. Verify it before building.
+
+### 11.7 Making the test suite hermetic
+
+Point `backend/.env` at the local stack and the 132 erroring tests get a real database.
+Two further improvements, both worth doing during job 1:
+
+1. **Wrap each test in a transaction and roll it back.** The `pool` fixture
+   (`conftest.py:10-14`) creates and closes the *global* pool per test — slow, and it
+   leaves rows behind between runs.
+2. **Stop creating real Supabase Auth users.** `test_auth_user` and `test_auth_user_2`
+   (`conftest.py:17-58`) POST to the Auth admin API. Against a local stack that is at
+   least offline, but inserting directly into `auth.users` is faster and collapses the
+   duplicated fixture pair — they are identical apart from their names.
+
+Target: `pytest -q` passes with no network access at all.
+
+### 11.8 Definition of done for job 0
+
+- [ ] `npx supabase start` runs; Studio reachable at `http://localhost:54323`
+- [ ] `npx supabase db reset` applies all 7 migrations without error
+- [ ] `pytest -q` → **173 passed**, with no network
+- [ ] `uvicorn` serves `/health` → `{"status":"ok"}`
+- [ ] `npm run dev` → Microsoft sign-in works end to end against local Supabase
+- [ ] `npm run build && npx serve out` → the exported build works too
+- [ ] Render deploys from a **corrected** `render.yaml`; `/health` returns 200
+- [ ] Cloudflare Pages serves the built frontend
+- [ ] The cron reaches `POST /api/sync/run` with the shared secret and returns counts
