@@ -94,12 +94,20 @@ class ContactsRepository:
         pattern = f"%{search}%" if search else None
         return await self._pool.fetch(
             """
+            -- Aggregate once and join, rather than a correlated subquery that
+            -- scanned action_items once per contact row. Measured at 1,000
+            -- contacts and 10,000 items, the subquery form ran with loops=1000.
+            -- left join, not inner: a contact with no open items must still
+            -- appear, with a count of zero.
             select c.*,
-                   (
-                       select count(*) from public.action_items ai
-                       where ai.contact_id = c.id and ai.status = 'open'
-                   ) as open_action_item_count
+                   coalesce(counts.open_action_item_count, 0) as open_action_item_count
             from public.contacts c
+            left join (
+                select contact_id, count(*) as open_action_item_count
+                from public.action_items
+                where user_id = $1 and status = 'open' and contact_id is not null
+                group by contact_id
+            ) counts on counts.contact_id = c.id
             where c.user_id = $1
               and ($2::text is null or c.display_name ilike $2 or c.email_address ilike $2)
             order by c.updated_at desc
