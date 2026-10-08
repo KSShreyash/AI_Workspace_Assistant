@@ -257,11 +257,22 @@ class ExtractedActionItem(BaseModel):
     direction: Literal["mine", "theirs"]
     due_date: str | None
     participant_ref: str | None
+    category: Literal["work", "meeting", "follow_up", "other"]   # for job 4, see §7.5
 
 class ExtractionResult(BaseModel):
     people: list[ExtractedPerson]
     action_items: list[ExtractedActionItem]
 ```
+
+> **`category` is here deliberately, even though nothing consumes it until job 4.**
+> It feeds the Task Categories donut in the redesigned dashboard. It costs ~5 output
+> tokens per item, but adding it *later* means a second migration plus re-extracting
+> every stored message to backfill — a full day of token quota and several days of wall
+> clock at 200K TPD. Decide LLM output shape once, in job 1. See §7.5.
+>
+> Mirror it in `_SCHEMA` (as an `enum`) and add
+> `category text not null default 'other' check (category in ('work','meeting','follow_up','other'))`
+> to `action_items` in the same migration as `extraction_attempts`.
 
 `direction` as a `Literal` also closes the path where an invalid value trips the DB
 check constraint and aborts the transaction.
@@ -570,9 +581,168 @@ overlap, and extraction has no locking. Use a Postgres advisory lock keyed on
 
 ---
 
-## 7. Job 3 — Remaining audit fixes
+## 7. Job 4 — Dashboard and UI redesign
 
-Independent of jobs 1 and 2; land whenever. Detail in §8.
+*(Job 3 = the remaining audit fixes in §8. Independent of everything else, land whenever.
+Note §7.6 below: job 4 absorbs five of them naturally.)*
+
+Added 2026-10-08 from a supplied dashboard mockup plus a set of illustration assets.
+
+### 7.1 What the mockup specifies
+
+A complete visual reskin and a new information architecture, under the brand
+**"Candoor"** — warm cream ground, forest-green accent, terracotta secondary, soft
+pastel icon chips, and a painted autumn landscape behind the greeting.
+
+**Navigation changes from 4 items to 7, plus a global search bar:**
+
+| Mockup nav | Today | Status |
+|---|---|---|
+| Dashboard | `/dashboard` | Rebuild |
+| Emails | — | **New page, no backend** |
+| Tasks | `/planner` | Rename + restyle |
+| People | `/contacts` | Rename + restyle |
+| Calendar | — | **New page, no backend endpoint** |
+| Insights | — | **New page, no backend** |
+| Settings | — | **New page** (job 2 needs it anyway, for managing connected mailboxes) |
+| *(top search bar)* | `/search` page | Promote to global chrome |
+
+### 7.2 Assets (verified on disk at `assets/`)
+
+| File | Size | Alpha |
+|---|---|---|
+| `main.webp` | 67 KB | opaque — composite base |
+| `layer-clouds.webp` | 224 KB | yes |
+| `layer-canopy.webp` | 198 KB | yes |
+| `layer-water.webp` | 146 KB | yes |
+| `layer-leaves.webp` | 43 KB | yes |
+| `layer-birds.webp` | 26 KB | yes |
+
+All six are 1672×941; **712 KB total**. One opaque composite plus five transparent
+depth layers is a parallax kit, not a single banner. `main.webp` has deliberate negative
+space across its left ~55%, which is where the greeting sits.
+
+**Actions:** move `assets/` into `frontend/public/` (it is currently untracked at the
+repo root and would not ship). Serve `main.webp` alone as the static/reduced-motion
+fallback; stack the layers only when motion is permitted. 712 KB is acceptable on a CDN
+but must not block first paint — the hero loads after the stat tiles.
+
+### 7.3 The reskin is cheap; the data is not
+
+Verified: **no component contains a hardcoded colour or a stock Tailwind palette class.**
+Every colour resolves through one of the 13 `var(--color-*)` tokens. The dark→light
+inversion is therefore a ~13-line edit in `globals.css`, not a component sweep. That is
+a genuine payoff from the existing token discipline.
+
+The real work is that **the dashboard displays data the backend does not produce.**
+`/api/dashboard` returns exactly three fields today: `contact_count`,
+`open_action_item_count`, `activity[]`.
+
+| Mockup element | Available today? | Gap |
+|---|---|---|
+| Emails Processed 128, ↑12% this week | no | week-over-week count — computable in SQL from `emails.received_at` |
+| Tasks Extracted 36, ↑24% | no | same, from `action_items.created_at` |
+| Meetings Detected 8, ↑3 | no | needs email classification — see §7.4 |
+| Important People 24, ↑5 new this month | partial | `contact_count` is all-time; "important" is undefined — **open question** |
+| Recent Emails list | no | there is no email endpoint at all |
+| Task/Meeting/FYI/Important chips | no | classification — see §7.4 |
+| Upcoming Tasks, "From: X" | mostly | `action_items` already joins contact |
+| Email→Task Flow, 7-day series | no | daily aggregate, computable in SQL |
+| Task Categories donut | no | needs a category per action item — see §7.5 |
+| Quick Actions | partly | Sync exists; the rest are navigation |
+
+### 7.4 Email classification costs zero extra LLM tokens
+
+The five filter chips look like they need an LLM pass. They do not — every one is
+derivable from data already held or returned free by the provider:
+
+| Chip | Derivation | Cost |
+|---|---|---|
+| **Task** | `exists (select 1 from action_items where source_type='email' and source_id = emails.id)` | free, already stored |
+| **Meeting** | Graph exposes the `eventMessage` subtype with `meetingMessageType`; Gmail carries a `text/calendar` part or `.ics` attachment | free, provider-native |
+| **FYI** | extracted, produced no action items, not a meeting | free |
+| **Important** | Graph `importance == "high"` or `inferenceClassification == "focused"` | free — the same field §5.5 already stores for the pre-filter |
+| **All** | — | — |
+
+This matters because the obvious implementation — asking the LLM to classify every
+email — would add output tokens to every call and worsen the §4 budget. Deriving
+instead keeps the quota math in §4 unchanged.
+
+### 7.5 Task categories must be decided during job 1, not job 4
+
+The Task Categories donut (Work 45% / Meetings 25% / Follow-ups 20% / Other 10%) is the
+one dashboard element that genuinely needs new LLM output: a category per action item.
+
+**It is ~5 tokens per item — trivially cheap — but it must go into `_SCHEMA` during
+job 1.** Adding it later means a second migration *and* re-extracting every message to
+backfill the column, which costs a full day's token quota and several days of wall
+clock at 200K TPD.
+
+**Therefore: add `category` to the action-item schema in job 1 even though nothing
+consumes it until job 4.** This is the single most important cross-job dependency
+introduced by the redesign. Suggested enum, matching the mockup's legend:
+`work | meeting | follow_up | other`.
+
+The same logic applies to anything else job 4 wants out of the LLM — decide it in job 1
+or pay for a re-extraction.
+
+### 7.6 Audit findings absorbed by this job
+
+Five items from §8 are fixed as a natural consequence of the rewrite. Do not schedule
+them separately:
+
+- **§8.5/16** — the new nav must use `next/link`, which retires the full-page-reload bug
+  and makes `PageTransition` and the `layoutId` animations function for the first time
+- **§8.7/20** — `NavBar`'s `localStorage`-in-`useState` hydration mismatch; the nav is
+  being rewritten anyway
+- **§8.7/21** — `prefers-reduced-motion` stops being optional the moment there is a
+  parallax hero (see §7.7)
+- **§8.7/21** — `color-scheme` must be declared for the light theme so native
+  `<select>` and scrollbars match
+- **§8.5/17** — the dashboard currently downloads every action item to count them
+  client-side; the new aggregate endpoint removes the need
+
+### 7.7 Charts and motion
+
+**Charts.** There is no charting dependency today. Two shapes are needed: a 2-series
+line/area chart and a donut. Recommendation: **hand-authored inline SVG**, not a
+library. Rationale — the app is a static export where bundle size is the main cost,
+two chart types do not justify ~100 KB of Recharts, and the design calls for specific
+styling (soft area fill, muted grid, matched token palette) that is easier to control
+directly. Load the `dataviz` skill before writing them.
+
+**Parallax.** Layer order back-to-front is `clouds → canopy → water → leaves → birds`
+over `main.webp`. Drive it from pointer position and/or scroll with small translate
+offsets per layer.
+
+**`prefers-reduced-motion` is a hard requirement here, not a nicety.** Under reduced
+motion: render `main.webp` alone, no layer stack, no transform. Framer Motion is already
+a dependency; `<MotionConfig reducedMotion="user">` at the root handles the existing
+animations in one line. GSAP is available if the parallax wants a timeline, but Framer
+alone is likely sufficient — avoid adding a second animation library for one effect.
+
+### 7.8 Sequencing within job 4
+
+```
+4a  Palette + tokens + color-scheme  (globals.css, ~13 lines)   <- ship first, zero risk
+4b  Nav shell: 7 items, next/link, global search bar, Settings page
+4c  Backend: new /api/dashboard aggregate contract + /api/emails
+4d  Dashboard widgets against the real contract
+4e  Parallax hero + reduced-motion fallback
+4f  Insights + Calendar pages
+```
+
+4a and 4b are independent of jobs 1 and 2 and can land immediately. **4c onward should
+follow job 2**, because the Emails page needs per-account attribution — building it
+single-account first means rebuilding it.
+
+### 7.9 Naming
+
+The project now carries **four** different names: the folder is *AI Workspace
+Assistant*, the GitHub repo is *AI-Relationship-Manager*, the code and README say
+*AI Assistant* (commit `7fe7f1a`), and the mockup says **Candoor**. Pick one before
+job 4 touches user-facing strings, or the inconsistency gets baked into a fifth place.
+The mockup is the most considered of the four.
 
 ---
 
@@ -724,21 +894,37 @@ service-role tables.
 Job 0  Provision a new Supabase project; apply all 7 migrations; restore backend/.env
        (nothing is verifiable until this is done)
    |
-Job 1  Free LLM + extraction hardening          <-- start here, §5
+Job 4a Palette + tokens + color-scheme           §7.8  <-- zero risk, ship anytime
+       ~13 lines in globals.css. Independent of everything.
+   |
+Job 1  Free LLM + extraction hardening           §5    <-- the critical path
        Groq swap, poison-pill fix, Pydantic validation, quota handling,
        pre-filter, truncation, batching, prompt-injection fencing (§8.6/18),
        notes coalesce (§8.2/3), the six logging fixes (§8.4/10),
        render.yaml env vars (§8.1/1)
+       >> INCLUDES action_item.category for job 4 (§7.5) - do not defer <<
    |
-Job 3a Quick independent wins (can run in parallel with job 1)
+Job 3a Quick independent wins (parallel with job 1)
        indexes + subquery rewrite (§8.5/15), four try/catch handlers (§8.4/9),
-       next/link (§8.5/16), timezone bucketing (§8.3/6)
+       timezone bucketing (§8.3/6)
+       (next/link is NOT here - job 4b absorbs it, §7.6)
+   |
+Job 4b Nav shell: 7 items, next/link, global search, Settings page   §7.8
+       Absorbs five audit findings (§7.6). Independent of jobs 1 and 2.
    |
 Q1     RESOLVE: is Google Calendar in scope?
    |
 Job 2  Multi-provider email                      §6
        connected_accounts migration, linkIdentity flow, gmail_client,
        provider-dispatching sync, advisory locking (§6.5)
+   |
+Job 4c Backend aggregates: new /api/dashboard contract + /api/emails   §7.3
+       AFTER job 2 - the Emails page needs per-account attribution, and
+       building it single-account means rebuilding it.
+   |
+Job 4d Dashboard widgets, charts (hand-authored SVG, load `dataviz`)   §7.7
+Job 4e Parallax hero + prefers-reduced-motion fallback                 §7.7
+Job 4f Insights + Calendar pages
    |
 Job 3b Remaining polish                          §8.7
 ```
@@ -770,6 +956,13 @@ starting with job 1.
   main bulk signal? It is free and accurate, but it is the provider's judgement, so a
   genuine message misfiled as `other` would be skipped.
 - §9 — does the sequencing match your priorities?
+- **§7.9 — which name wins?** There are now four (folder / repo / code / mockup).
+- **§7.3 — what makes a person "Important"?** The stat tile needs a definition:
+  most-emailed, has open action items, or manually starred.
+- **§7.7 — animated parallax hero, or static `main.webp`?** The layered assets support
+  parallax, but static is lighter, simpler, and never janky on a cold Render dyno.
+- §7.8 — is the "4c after job 2" ordering acceptable, or do you want a visible
+  dashboard sooner even if the Emails page gets rebuilt later?
 
 **Change log for this document**
 
@@ -777,3 +970,4 @@ starting with job 1.
 |---|---|
 | 1 | Initial design. |
 | 2 | Added **§5.8**, a pre-flight list of 15 verified collisions between planned changes and existing code. Corrected **§5.4** (quota state cannot reuse `sync_state` — CHECK constraint). Rewrote **§5.5** (Graph `internetMessageHeaders` requires `$select` on single-message GET, so the filter now uses provider-native classification instead). Specified the batch/transaction boundary in **§5.6**. Renamed `llm_batch_size` → `llm_messages_per_call` to avoid collision with the existing `extraction_batch_limit`. |
+| 3 | Added **job 4** (**§7**) from the supplied dashboard mockup and parallax assets: new 7-item IA, warm-light reskin, four new pages, charts, parallax hero. Key findings — the reskin itself is ~13 lines because no component hardcodes a colour (verified), but the dashboard needs data the backend does not produce; the Task/Meeting/FYI chips are derivable at **zero LLM cost** (§7.4); and `action_item.category` **must be added during job 1** or job 4 forces a full re-extraction (§7.5, now reflected in §5.3). Job 4 absorbs five audit findings (§7.6). **§9** sequencing rewritten to interleave job 4. |
