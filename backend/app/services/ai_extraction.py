@@ -12,6 +12,7 @@ from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
 from app.services import openai_client
+from app.services.extraction_filter import should_extract
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,28 @@ async def _record_extraction_failure(
     )
 
 
+async def _record_skipped(
+    pool: asyncpg.Pool, table: str, source_id: uuid.UUID, reason: str
+) -> None:
+    """Mark a message the filter rejected as handled.
+
+    extracted_at is stamped here, unlike the failure path: the decision is
+    final, not a transient error worth retrying. Leaving it null would put the
+    row back at the head of the oldest-first window on every run, crowding out
+    the mail actually worth reading.
+    """
+    await pool.execute(
+        f"""
+        update public.{table}
+        set extracted_at = now(),
+            extraction_error = $2
+        where id = $1
+        """,
+        source_id,
+        f"skipped: {reason}"[:500],
+    )
+
+
 async def _extract_pending_emails(
     pool: asyncpg.Pool, user_id: uuid.UUID, own_email: str | None, limit: int | None
 ) -> int:
@@ -181,7 +204,17 @@ async def _extract_pending_emails(
     processed = 0
     for row in rows:
         try:
-            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(_strip_html(row['body_text']))}"
+            body = _strip_html(row["body_text"])
+            keep, reason = should_extract(
+                {"from_address": row["from_address"], "body": body}
+            )
+            if not keep:
+                # Filtered before the model, not after: the whole point is to
+                # not spend tokens on it.
+                await _record_skipped(pool, table, row["id"], reason)
+                continue
+
+            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(body)}"
             await _process_item(
                 pool, user_id, "email", row["id"], content,
                 [(row["from_address"], None)], own_email,
@@ -262,7 +295,16 @@ async def _extract_pending_chat_messages(
     processed = 0
     for row in rows:
         try:
-            content = _truncate_body(_strip_html(row["content"]))
+            body = _strip_html(row["content"])
+            # No sender address on a chat message, so only the content rules
+            # apply - which is where the value is anyway: acknowledgements
+            # dominate chat volume and cost a full prompt preamble each.
+            keep, reason = should_extract({"body": body})
+            if not keep:
+                await _record_skipped(pool, table, row["id"], reason)
+                continue
+
+            content = _truncate_body(body)
             await _process_item(
                 pool, user_id, "chat_message", row["id"], content,
                 [(None, row["from_user"])], own_email,

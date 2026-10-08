@@ -178,7 +178,7 @@ async def test_extract_user_processes_pending_email(pool, test_auth_user):
     row = await pool.fetchrow(
         "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
         "values ($1, $2, $3, $4, $5) returning id",
-        user_id, "msg-x", "irene@example.com", "Hello", "<p>Hi there</p>",
+        user_id, "msg-x", "irene@example.com", "Hello", "<p>Could you review the draft and send feedback before Thursday?</p>",
     )
 
     result = {"people": [{"ref": "p0", "notes": "Said hi"}], "action_items": []}
@@ -246,7 +246,7 @@ async def test_extract_user_respects_limit_across_tables(pool, test_auth_user):
         await pool.execute(
             "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
             "values ($1, $2, $3, $4, $5)",
-            user_id, f"msg-limit-{i}", f"person{i}@example.com", "Hi", "content",
+            user_id, f"msg-limit-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
 
     result = {"people": [], "action_items": []}
@@ -268,13 +268,14 @@ async def test_extract_user_carries_remaining_budget_into_next_table(pool, test_
         await pool.execute(
             "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
             "values ($1, $2, $3, $4, $5)",
-            user_id, f"msg-budget-{i}", f"person{i}@example.com", "Hi", "content",
+            user_id, f"msg-budget-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
     for i in range(2):
         await pool.execute(
             "insert into public.chat_messages (user_id, graph_chat_id, graph_message_id, from_user, content) "
             "values ($1, $2, $3, $4, $5)",
-            user_id, "chat-budget", f"chat-msg-budget-{i}", f"Chatter{i}", "hey",
+            user_id, "chat-budget", f"chat-msg-budget-{i}", f"Chatter{i}",
+            "Please take over the release notes for this sprint.",
         )
 
     result = {"people": [], "action_items": []}
@@ -305,7 +306,7 @@ async def test_extract_user_unbounded_processes_everything(pool, test_auth_user)
         await pool.execute(
             "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
             "values ($1, $2, $3, $4, $5)",
-            user_id, f"msg-unbounded-{i}", f"person{i}@example.com", "Hi", "content",
+            user_id, f"msg-unbounded-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
 
     result = {"people": [], "action_items": []}
@@ -325,12 +326,12 @@ async def test_extract_user_isolates_per_item_failures(pool, test_auth_user):
     await pool.execute(
         "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
         "values ($1, $2, $3, $4, $5)",
-        user_id, "msg-fail", "fail@example.com", "Hi", "content",
+        user_id, "msg-fail", "fail@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
     )
     await pool.execute(
         "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
         "values ($1, $2, $3, $4, $5)",
-        user_id, "msg-ok", "ok@example.com", "Hi", "content",
+        user_id, "msg-ok", "ok@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
     )
 
     async def fake_extract(content, participants):
@@ -366,7 +367,7 @@ async def test_permanently_failing_item_stops_being_retried(pool, test_auth_user
     await pool.execute(
         """
         insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'poison-1', 'sender@example.com', 'Subject', 'Body')
+        values ($1, 'poison-1', 'sender@example.com', 'Subject', 'Could you review the draft and send feedback before Thursday?')
         """,
         user_id,
     )
@@ -411,10 +412,10 @@ async def test_failing_items_do_not_starve_newer_mail(pool, test_auth_user):
     await pool.execute(
         """
         insert into public.emails (user_id, graph_message_id, from_address, subject, body_text, received_at)
-        values ($1, 'poison-a', 's@example.com', 'Bad', 'Body', now() - interval '5 days'),
-               ($1, 'poison-b', 's@example.com', 'Bad', 'Body', now() - interval '4 days'),
-               ($1, 'poison-c', 's@example.com', 'Bad', 'Body', now() - interval '3 days'),
-               ($1, 'healthy-1', 'other@example.com', 'Good', 'Body', now() - interval '1 day')
+        values ($1, 'poison-a', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '5 days'),
+               ($1, 'poison-b', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '4 days'),
+               ($1, 'poison-c', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '3 days'),
+               ($1, 'healthy-1', 'other@example.com', 'Good', 'Could you review the draft and send feedback before Thursday?', now() - interval '1 day')
         """,
         user_id,
     )
@@ -566,3 +567,105 @@ async def test_action_item_category_defaults_when_absent(pool, test_auth_user):
         "select category from public.action_items where user_id = $1", user_id
     )
     assert stored == "other"
+
+
+@pytest.mark.asyncio
+async def test_bulk_mail_never_reaches_the_model(pool, test_auth_user):
+    """Automated mail must be filtered out before an LLM call is made.
+
+    Most inbox volume is notifications and newsletters that yield no action
+    items. On a free tier the binding limit is tokens per day, so spending them
+    on mail that cannot produce a task is the difference between a mailbox that
+    fits in the budget and one that does not.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text, received_at)
+        values ($1, 'bulk-1', 'noreply@example.com', 'Your weekly digest',
+                'Here is everything that happened this week, at length.', now() - interval '2 days'),
+               ($1, 'real-1', 'colleague@example.com', 'Re: Thursday',
+                'Can you send the deck before Thursday please?', now() - interval '1 day')
+        """,
+        user_id,
+    )
+
+    seen = []
+
+    async def capture(content, participants):
+        seen.append(content)
+        return {"people": [], "action_items": []}
+
+    with patch("app.services.ai_extraction.openai_client.extract", side_effect=capture):
+        await extract_user(pool, user_id, 10)
+
+    assert len(seen) == 1, f"expected only the real message to be sent, got {len(seen)}"
+    assert "deck before Thursday" in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_filtered_mail_is_not_re_queued_every_run(pool, test_auth_user):
+    """A skipped message must leave the queue, with the rule that skipped it.
+
+    Skipping without recording anything would leave extracted_at null, so the
+    row would be re-examined on every run forever - cheap, but it would also sit
+    at the head of the oldest-first window and crowd out real mail.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
+        values ($1, 'bulk-2', 'notifications@example.com', 'Alert',
+                'A long enough body to clear the minimum length rule easily.')
+        """,
+        user_id,
+    )
+
+    with patch("app.services.ai_extraction.openai_client.extract") as mock_extract:
+        await extract_user(pool, user_id, 10)
+        await extract_user(pool, user_id, 10)
+
+    mock_extract.assert_not_called()
+
+    row = await pool.fetchrow(
+        "select extracted_at, extraction_error from public.emails where graph_message_id = 'bulk-2'"
+    )
+    assert row["extracted_at"] is not None, "skipped mail still pending, will re-queue forever"
+    assert "sender" in (row["extraction_error"] or "").lower(), "skip reason not recorded"
+
+
+@pytest.mark.asyncio
+async def test_trivial_chat_messages_never_reach_the_model(pool, test_auth_user):
+    """"ok" and "thanks" dominate chat volume and contain nothing to extract.
+
+    Chat is the noisiest source per message: a one-word acknowledgement costs
+    the same prompt preamble as a real request.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.chat_messages
+            (user_id, graph_chat_id, graph_message_id, from_user, content, sent_at)
+        values ($1, 'c1', 'm1', 'Dana', 'ok', now() - interval '3 days'),
+               ($1, 'c1', 'm2', 'Dana', 'thanks!', now() - interval '2 days'),
+               ($1, 'c1', 'm3', 'Dana',
+                'Can you own the migration rollback plan before we ship?',
+                now() - interval '1 day')
+        """,
+        user_id,
+    )
+
+    seen = []
+
+    async def capture(content, participants):
+        seen.append(content)
+        return {"people": [], "action_items": []}
+
+    with patch("app.services.ai_extraction.openai_client.extract", side_effect=capture):
+        await extract_user(pool, user_id, 10)
+
+    assert len(seen) == 1, f"expected 1 substantive message, got {len(seen)}"
+    assert "migration rollback" in seen[0]
