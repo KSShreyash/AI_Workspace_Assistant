@@ -17,14 +17,16 @@ class ActionItemsRepository:
         due_date: date | None,
         source_type: str,
         source_id: uuid.UUID,
+        category: str = "other",
         conn: asyncpg.Connection | None = None,
     ) -> None:
         executor = conn or self._pool
         await executor.execute(
             """
             insert into public.action_items
-                (user_id, contact_id, text, direction, status, due_date, source_type, source_id)
-            values ($1, $2, $3, $4, 'open', $5, $6, $7)
+                (user_id, contact_id, text, direction, status, due_date,
+                 source_type, source_id, category)
+            values ($1, $2, $3, $4, 'open', $5, $6, $7, $8)
             """,
             user_id,
             contact_id,
@@ -33,6 +35,7 @@ class ActionItemsRepository:
             due_date,
             source_type,
             source_id,
+            category,
         )
 
     async def list_for_contact(

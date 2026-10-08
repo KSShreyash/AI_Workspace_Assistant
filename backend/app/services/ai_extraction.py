@@ -128,6 +128,10 @@ async def _process_item(
                     due_date=_parse_due_date(item.get("due_date")),
                     source_type=source_type,
                     source_id=source_id,
+                    # extract() guarantees this via its schema, but _process_item
+                    # is also driven directly in tests - default rather than
+                    # raise, since the database constraint is the real guard.
+                    category=item.get("category") or "other",
                     conn=conn,
                 )
 

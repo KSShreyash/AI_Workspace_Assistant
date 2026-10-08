@@ -503,3 +503,66 @@ async def test_truncation_keeps_the_start_of_the_message(pool, test_auth_user):
         await extract_user(pool, user_id, 10)
 
     assert "IMPORTANT FIRST LINE." in captured["content"]
+
+
+@pytest.mark.asyncio
+async def test_action_item_category_is_persisted(pool, test_auth_user):
+    """The category the model assigns must reach the database.
+
+    It drives the dashboard's task breakdown. It is extracted and stored now,
+    rather than when that chart is built, because adding it later would mean
+    re-extracting every stored message to backfill the column - a full day of
+    token quota on a free tier.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    result = {
+        "people": [{"ref": "p0", "notes": "Runs the launch."}],
+        "action_items": [
+            {
+                "text": "Book the review",
+                "direction": "mine",
+                "due_date": None,
+                "participant_ref": "p0",
+                "category": "meeting",
+            }
+        ],
+    }
+
+    with patch("app.services.ai_extraction.openai_client.extract", return_value=result):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "content",
+            [("dana@example.com", "Dana")], own_email=email,
+        )
+
+    stored = await pool.fetchval(
+        "select category from public.action_items where user_id = $1", user_id
+    )
+    assert stored == "meeting"
+
+
+@pytest.mark.asyncio
+async def test_action_item_category_defaults_when_absent(pool, test_auth_user):
+    """A category the database will accept must always be written."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    result = {
+        "people": [],
+        "action_items": [
+            {"text": "Unlabelled task", "direction": "theirs", "due_date": None,
+             "participant_ref": None}
+        ],
+    }
+
+    with patch("app.services.ai_extraction.openai_client.extract", return_value=result):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "content",
+            [("eve@example.com", "Eve")], own_email=email,
+        )
+
+    stored = await pool.fetchval(
+        "select category from public.action_items where user_id = $1", user_id
+    )
+    assert stored == "other"

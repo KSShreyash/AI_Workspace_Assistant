@@ -1,9 +1,46 @@
 import asyncio
 import json
+from typing import Literal
 
 from openai import AsyncOpenAI, RateLimitError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.core.config import settings
+
+
+class ExtractedPerson(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str
+    notes: str
+
+
+class ExtractedActionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    direction: Literal["mine", "theirs"]
+    due_date: str | None
+    participant_ref: str | None
+    # Consumed by the dashboard's task breakdown. In the schema from the start
+    # deliberately: adding it later would mean re-extracting every stored
+    # message to backfill it, costing a full day of token quota.
+    category: Literal["work", "meeting", "follow_up", "other"] = "other"
+
+
+class ExtractionResult(BaseModel):
+    """The contract between the model and the database.
+
+    Validated here rather than at the point of use: _process_item indexes these
+    fields inside an open transaction, so a missing key or an out-of-range
+    direction surfaces as a KeyError or a check-constraint violation that
+    aborts the whole pass and discards work already done in it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    people: list[ExtractedPerson]
+    action_items: list[ExtractedActionItem]
 
 # Model and endpoint come from settings - see config.Settings.llm_*
 
@@ -36,8 +73,18 @@ _SCHEMA = {
                             "direction": {"type": "string", "enum": ["mine", "theirs"]},
                             "due_date": {"type": ["string", "null"]},
                             "participant_ref": {"type": ["string", "null"]},
+                            "category": {
+                                "type": "string",
+                                "enum": ["work", "meeting", "follow_up", "other"],
+                            },
                         },
-                        "required": ["text", "direction", "due_date", "participant_ref"],
+                        "required": [
+                            "text",
+                            "direction",
+                            "due_date",
+                            "participant_ref",
+                            "category",
+                        ],
                         "additionalProperties": False,
                     },
                 },
@@ -96,7 +143,12 @@ def _build_prompt(content: str, participants: list[dict]) -> str:
         "committed to do for the user ('theirs'). Include participant_ref (matching "
         "one of the refs above) when the item clearly relates to one participant, "
         "else null. Include due_date (YYYY-MM-DD) only if stated or clearly implied, "
-        "else null. Return an empty action_items list if there are none."
+        "else null. Return an empty action_items list if there are none.\n\n"
+        "Give each action item a category:\n"
+        "- 'meeting' if it is about scheduling, attending or preparing for a meeting\n"
+        "- 'follow_up' if it is chasing, replying to or checking back on something\n"
+        "- 'work' for substantive work to produce or deliver\n"
+        "- 'other' if none of the above clearly fits"
     )
 
 
@@ -112,4 +164,22 @@ async def extract(content: str, participants: list[dict]) -> dict:
         response = await _client.chat.completions.create(
             model=settings.llm_model, messages=messages, response_format=_SCHEMA
         )
-    return json.loads(response.choices[0].message.content)
+    raw = response.choices[0].message.content
+    if raw is None:
+        # A refusal (or a safety stop) returns no content. json.loads(None)
+        # raises TypeError, which reads as a bug rather than a model outcome.
+        raise ValueError("model returned no content (refusal or empty response)")
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"model returned content that is not JSON: {exc}") from exc
+
+    try:
+        validated = ExtractionResult.model_validate(parsed)
+    except ValidationError as exc:
+        raise ValueError(f"model output did not match the extraction schema: {exc}") from exc
+
+    # Returned as a plain dict so callers keep indexing as before - but now
+    # every field is guaranteed present and in range.
+    return validated.model_dump()

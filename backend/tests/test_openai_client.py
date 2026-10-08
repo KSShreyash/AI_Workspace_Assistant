@@ -136,3 +136,84 @@ def test_prompt_cannot_be_escaped_by_forging_the_delimiter():
     assert prompt.count("--- END UNTRUSTED CONTENT ---") <= 1, (
         "content was able to forge the closing delimiter"
     )
+
+
+@pytest.mark.asyncio
+async def test_extract_rejects_output_missing_a_required_field():
+    """Malformed model output must fail at the boundary, not deep in a transaction.
+
+    _process_item indexes the result directly, so a missing key surfaces as a
+    KeyError inside an open transaction - which the caller swallows, leaving the
+    message to be retried and fail identically every time.
+    """
+    bad = {"people": [{"ref": "p0"}], "action_items": []}  # no "notes"
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(bad))
+
+    with patch("app.services.openai_client._client", new=mock_client):
+        with pytest.raises(ValueError):
+            await extract("content", [])
+
+
+@pytest.mark.asyncio
+async def test_extract_rejects_an_invalid_action_item_direction():
+    """direction is constrained in the database; catch it before the write.
+
+    An unexpected value aborts the whole transaction on a check constraint,
+    discarding the contacts extracted in the same pass.
+    """
+    bad = {
+        "people": [],
+        "action_items": [
+            {
+                "text": "do a thing",
+                "direction": "sideways",
+                "due_date": None,
+                "participant_ref": None,
+                "category": "work",
+            }
+        ],
+    }
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(bad))
+
+    with patch("app.services.openai_client._client", new=mock_client):
+        with pytest.raises(ValueError):
+            await extract("content", [])
+
+
+@pytest.mark.asyncio
+async def test_extract_raises_a_clear_error_when_the_model_refuses():
+    """A refusal returns content=None; json.loads(None) raises TypeError today."""
+    response = MagicMock()
+    response.choices = [MagicMock(message=MagicMock(content=None))]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=response)
+
+    with patch("app.services.openai_client._client", new=mock_client):
+        with pytest.raises(ValueError):
+            await extract("content", [])
+
+
+@pytest.mark.asyncio
+async def test_extract_accepts_a_well_formed_response_with_a_category():
+    """The happy path carries the category the dashboard groups tasks by."""
+    good = {
+        "people": [{"ref": "p0", "notes": "Leads payments."}],
+        "action_items": [
+            {
+                "text": "Send the deck",
+                "direction": "mine",
+                "due_date": "2026-08-01",
+                "participant_ref": "p0",
+                "category": "follow_up",
+            }
+        ],
+    }
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=_mock_response(good))
+
+    with patch("app.services.openai_client._client", new=mock_client):
+        result = await extract("content", [])
+
+    assert result["action_items"][0]["category"] == "follow_up"
