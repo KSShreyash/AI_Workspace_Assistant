@@ -13,7 +13,18 @@ class Settings(BaseSettings):
     ms_authority: str = "https://login.microsoftonline.com/common"
     cors_allow_origins: str = "http://localhost:3000"
     sync_secret: str
-    openai_api_key: str
+
+    # LLM provider. Kept behind config rather than constants because free-tier
+    # quotas are not a contract - switching provider or model should be an
+    # environment change, not a code change. Any OpenAI-compatible endpoint
+    # works; Groq is the default because its response_format shape matches the
+    # schema this app already sends.
+    llm_api_key: str
+    llm_base_url: str = "https://api.groq.com/openai/v1"
+    llm_model: str = "openai/gpt-oss-20b"
+
+    # Items processed per extraction run (not messages per LLM call - see
+    # llm_messages_per_call when batching lands).
     extraction_batch_limit: int = 50
 
 

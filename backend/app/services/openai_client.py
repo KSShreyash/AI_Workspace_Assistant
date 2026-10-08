@@ -5,7 +5,7 @@ from openai import AsyncOpenAI, RateLimitError
 
 from app.core.config import settings
 
-MODEL = "gpt-4o-mini"
+# Model and endpoint come from settings - see config.Settings.llm_*
 
 _SCHEMA = {
     "type": "json_schema",
@@ -49,8 +49,10 @@ _SCHEMA = {
 }
 
 
-def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=settings.openai_api_key)
+# Module-level, not a factory. Each AsyncOpenAI owns an httpx connection pool
+# that is never closed, and extraction constructs one per message - so a factory
+# leaks a pool per extracted email.
+_client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
 
 
 def _build_prompt(content: str, participants: list[dict]) -> str:
@@ -82,14 +84,13 @@ def _build_prompt(content: str, participants: list[dict]) -> str:
 async def extract(content: str, participants: list[dict]) -> dict:
     prompt = _build_prompt(content, participants)
     messages = [{"role": "user", "content": prompt}]
-    client = _client()
     try:
-        response = await client.chat.completions.create(
-            model=MODEL, messages=messages, response_format=_SCHEMA
+        response = await _client.chat.completions.create(
+            model=settings.llm_model, messages=messages, response_format=_SCHEMA
         )
     except RateLimitError:
         await asyncio.sleep(5)
-        response = await client.chat.completions.create(
-            model=MODEL, messages=messages, response_format=_SCHEMA
+        response = await _client.chat.completions.create(
+            model=settings.llm_model, messages=messages, response_format=_SCHEMA
         )
     return json.loads(response.choices[0].message.content)

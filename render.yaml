@@ -31,8 +31,15 @@ services:
       # .github/workflows/graph-sync-cron.yml.
       - key: SYNC_SECRET
         sync: false
-      - key: OPENAI_API_KEY
+      # LLM provider. Any OpenAI-compatible endpoint; Groq by default because
+      # its response_format shape matches the schema this app already sends.
+      # Changing provider or model is an env change, not a code change.
+      - key: LLM_API_KEY
         sync: false
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-20b
       # Optional (defaults to 50). Caps items processed per extraction run.
       - key: EXTRACTION_BATCH_LIMIT
         value: "50"

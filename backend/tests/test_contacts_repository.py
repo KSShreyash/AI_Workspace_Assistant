@@ -149,3 +149,53 @@ async def test_search_respects_limit(pool, test_auth_user):
     results = await repo.search(user_id, "capped", 20)
 
     assert len(results) == 20
+
+
+@pytest.mark.asyncio
+async def test_upsert_by_email_preserves_existing_notes_when_given_none(pool, test_auth_user):
+    """Re-upserting a known contact without notes must not erase what is stored.
+
+    The AI extraction pass re-upserts every participant on every message it
+    processes. If the model returns nothing for a contact, that call must not
+    destroy the notes accumulated from earlier messages - there is no audit
+    trail and no way to recover them.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ContactsRepository(pool)
+
+    contact_id = await repo.upsert_by_email(
+        user_id, "alice@example.com", "Alice", "Leads the payments team."
+    )
+    await repo.upsert_by_email(user_id, "alice@example.com", "Alice", None)
+
+    found = await repo.get(user_id, contact_id)
+    assert found["notes"] == "Leads the payments team."
+
+
+@pytest.mark.asyncio
+async def test_upsert_by_email_overwrites_notes_when_given_a_new_value(pool, test_auth_user):
+    """Preserving notes on None must not block genuine updates."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ContactsRepository(pool)
+
+    contact_id = await repo.upsert_by_email(user_id, "bob@example.com", "Bob", "Old summary.")
+    await repo.upsert_by_email(user_id, "bob@example.com", "Bob", "New summary.")
+
+    found = await repo.get(user_id, contact_id)
+    assert found["notes"] == "New summary."
+
+
+@pytest.mark.asyncio
+async def test_upsert_by_display_name_preserves_existing_notes_when_given_none(pool, test_auth_user):
+    """Same guarantee for contacts that have a name but no email address."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ContactsRepository(pool)
+
+    contact_id = await repo.upsert_by_display_name(user_id, "Carol", "Mentioned in standup.")
+    await repo.upsert_by_display_name(user_id, "Carol", None)
+
+    found = await repo.get(user_id, contact_id)
+    assert found["notes"] == "Mentioned in standup."

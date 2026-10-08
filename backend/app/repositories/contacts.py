@@ -42,7 +42,10 @@ class ContactsRepository:
             values ($1, $2, $3, $4, now())
             on conflict (user_id, email_address) where email_address is not null do update
             set display_name = coalesce(excluded.display_name, public.contacts.display_name),
-                notes = excluded.notes,
+                -- coalesce, not a bare assignment: extraction re-upserts every
+                -- participant on every message, so a pass that produces no notes
+                -- must not erase what earlier messages established.
+                notes = coalesce(excluded.notes, public.contacts.notes),
                 updated_at = now()
             returning id
             """,
@@ -66,7 +69,7 @@ class ContactsRepository:
             insert into public.contacts (user_id, email_address, display_name, notes, updated_at)
             values ($1, null, $2, $3, now())
             on conflict (user_id, display_name) where email_address is null do update
-            set notes = excluded.notes,
+            set notes = coalesce(excluded.notes, public.contacts.notes),
                 updated_at = now()
             returning id
             """,
