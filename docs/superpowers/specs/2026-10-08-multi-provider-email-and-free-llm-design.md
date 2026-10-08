@@ -1088,7 +1088,8 @@ installed, so this costs one `npm i -D supabase`.
 cd "C:\Drive D\College\Projects\AI Workspace Assistant"
 npm i -D supabase
 npx supabase init          # creates supabase/config.toml; migrations/ already exists
-npx supabase start --debug # prints API URL, anon key, service_role key, DB URL
+# Pull the four needed images FIRST, detached - see the warning below.
+npx supabase start --debug   -x realtime,storage-api,imgproxy,edge-runtime,logflare,vector,pg-meta,studio,supavisor,mailpit
 
 # 2. Apply all migrations to the local DB
 npx supabase db reset      # replays supabase/migrations/*.sql in order
@@ -1104,6 +1105,36 @@ find . -name __pycache__ -type d -exec rm -rf {} +
 cd ../frontend && npm install && npm run dev        # http://localhost:3000
 ```
 
+> ### First-run image pull: do this detached, and exclude what you do not need
+>
+> `supabase start` pulls **12 images concurrently**, and `supabase/postgres` alone is
+> **1.24 GB**. On a normal connection the whole set takes long enough that any wrapper
+> with a timeout will kill it mid-download, leaving zero images and no explanation.
+> Verified the hard way on 2026-10-08: three separate attempts died this way while the
+> registry was reachable throughout (a `docker pull hello-world` succeeded in seconds
+> between failures).
+>
+> **This app needs four of those twelve** - `postgres`, `gotrue` (auth), `postgrest`,
+> and `kong` (gateway). Storage, Realtime, imgproxy, edge-runtime, mailpit, pg-meta,
+> Studio and the logflare/vector analytics pair are all unused here. Excluding them
+> removes roughly half the download and most of the memory footprint.
+>
+> Pull them serially and detached first, then start:
+>
+> ```bash
+> docker pull public.ecr.aws/supabase/postgres:17.11.0.004   # 1.24 GB - the slow one
+> docker pull public.ecr.aws/supabase/gotrue:v2.197.0        # 62 MB
+> docker pull public.ecr.aws/supabase/postgrest:v16.4        # 21 MB
+> docker pull public.ecr.aws/supabase/kong:2.8.1             # 139 MB
+> ```
+>
+> Pin the tags to whatever your CLI version reports - run `supabase start --debug` once
+> and read the `<tag>: Pulling from supabase/<image>` lines. Once cached, `start` is fast.
+>
+> Excluding Studio means no database GUI. Connect with any Postgres client on
+> `postgresql://postgres:postgres@127.0.0.1:54322/postgres`, or drop `studio,pg-meta`
+> from the exclusion list and pull those two as well.
+>
 > **Use `--debug` on the first run.** Without a TTY, the CLI's progress renderer buffers everything: `supabase start` produces zero output and pulls zero images for many minutes while appearing to work. It is not downloading - it is stuck. `--debug` bypasses the renderer and streams real pull progress. Verified 2026-10-08; the registry itself was reachable the whole time.
 
 `supabase start` prints the local keys — they are fixed, well-known development values,

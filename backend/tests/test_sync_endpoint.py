@@ -59,56 +59,47 @@ async def test_run_bulk_requires_secret_header_present(pool):
 
 
 @pytest.mark.asyncio
-async def test_run_bulk_syncs_all_connected_users_with_isolation(pool, test_auth_user):
-    import uuid as uuid_module
-
-    import httpx
-
+async def test_run_bulk_syncs_all_connected_users_with_isolation(
+    pool, test_auth_user, test_auth_user_2
+):
     user_id, email = test_auth_user
-    await ProfilesRepository(pool).upsert(user_id, email)
-    await ProfilesRepository(pool).set_graph_connection_status(user_id, "connected")
+    second_user_id, second_email = test_auth_user_2
 
-    second_email = f"test-{uuid_module.uuid4()}@example.com"
-    async with httpx.AsyncClient(
-        base_url=settings.supabase_url,
-        headers={
-            "apikey": settings.supabase_service_role_key,
-            "Authorization": f"Bearer {settings.supabase_service_role_key}",
-        },
-    ) as admin_client:
-        create_response = await admin_client.post(
-            "/auth/v1/admin/users",
-            json={"email": second_email, "email_confirm": True},
-        )
-        create_response.raise_for_status()
-        second_user_id = uuid_module.UUID(create_response.json()["id"])
+    profiles = ProfilesRepository(pool)
+    try:
+        for uid, mail in ((user_id, email), (second_user_id, second_email)):
+            await profiles.upsert(uid, mail)
+            await profiles.set_graph_connection_status(uid, "connected")
 
-        try:
-            await ProfilesRepository(pool).upsert(second_user_id, second_email)
-            await ProfilesRepository(pool).set_graph_connection_status(second_user_id, "connected")
+        seen: list = []
 
-            async def fake_sync_user(pool_arg, uid):
-                if uid == user_id:
-                    raise RuntimeError("boom")
-                # second_user_id succeeds silently (no exception)
+        async def fake_sync_user(pool_arg, uid):
+            seen.append(uid)
+            if uid == user_id:
+                raise RuntimeError("boom")
+            # second_user_id succeeds silently (no exception)
 
-            with patch("app.api.v1.sync.sync_user", side_effect=fake_sync_user):
-                transport = ASGITransport(app=app)
-                async with AsyncClient(transport=transport, base_url="http://test") as client:
-                    response = await client.post(
-                        "/api/sync/run", headers={"X-Sync-Secret": settings.sync_secret}
-                    )
+        with patch("app.api.v1.sync.sync_user", side_effect=fake_sync_user):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/sync/run", headers={"X-Sync-Secret": settings.sync_secret}
+                )
 
-            assert response.status_code == 200
-            body = response.json()
-            # Do not assert exact counts here: other real connected users in
-            # the same (production) database may be present and synced in
-            # the same batch run. Asserting >=1 for each proves this test's
-            # own two users were both processed (one failing, one
-            # succeeding) without ever touching rows this test didn't create.
-            assert body["synced"] >= 1
-            assert body["failed"] >= 1
-        finally:
-            await admin_client.delete(f"/auth/v1/admin/users/{second_user_id}")
-            # Clean up the first user's connected profile
-            await ProfilesRepository(pool).set_graph_connection_status(user_id, "disconnected")
+        assert response.status_code == 200
+        body = response.json()
+
+        # Assert on which users were actually dispatched rather than on the
+        # aggregate counts. Counts alone cannot distinguish "both of mine ran"
+        # from "one of mine plus someone else's", and this proves one failure
+        # does not abort the batch for the remaining users.
+        assert user_id in seen
+        assert second_user_id in seen
+        assert body["synced"] >= 1
+        assert body["failed"] >= 1
+    finally:
+        # The fixtures delete the auth.users rows, which cascades to profiles,
+        # but reset the status anyway so a failure mid-test cannot leave a
+        # connected profile behind for the next test's bulk run.
+        for uid in (user_id, second_user_id):
+            await profiles.set_graph_connection_status(uid, "disconnected")

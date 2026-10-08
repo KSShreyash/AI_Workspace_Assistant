@@ -1,19 +1,51 @@
 @import "tailwindcss";
 
+/*
+ * Palette: warm cream ground, forest-green accent, from the supplied dashboard
+ * mockup. Replaces the previous dark "Storm" palette.
+ *
+ * Every colour in every component resolves through one of these tokens - no
+ * component contains a hardcoded hex or a stock Tailwind palette class - so the
+ * whole reskin happens here and nowhere else. Keep it that way.
+ *
+ * Single committed light theme, deliberately. There is no dark variant: the
+ * product has one look, and a half-considered second theme is worse than none.
+ */
 :root {
-  --color-bg: #0A0A0F;
-  --color-bg-alt: #101015;
-  --color-surface: #16161D;
-  --color-border: #26262F;
-  --color-accent: #6D5DFB;
+  color-scheme: light;
+
+  /* Grounds. Neutrals carry a warm (yellow-red) bias so they sit with the
+     green accent and the painted hero rather than fighting them. A pure grey
+     would read as unconsidered next to that illustration. */
+  --color-bg: #FBF8F2;        /* page ground - warm cream */
+  --color-bg-alt: #F4EFE3;    /* sidebar, table headers - one step deeper */
+  --color-surface: #FFFFFF;   /* cards sit above the ground, not level with it */
+  --color-border: #E3DCCD;    /* warm hairline, not grey */
+
+  /* Accent. Deep enough to pass contrast on both cream and white as text,
+     which matters because it is used for links and the active nav label, not
+     just as a fill. */
+  --color-accent: #2E6B4F;
   --color-accent-fg: #FFFFFF;
-  --color-muted: #9497A6;
-  --color-fg: #F5F5F7;
-  --radius-card: 18px;
-  --color-danger: #F87171;
-  --color-danger-border: #4A2326;
-  --color-danger-surface: #2A1214;
-  --color-warning: #FBBF24;
+
+  /* Text. Warm near-black rather than true black - true black on cream reads
+     as a printing error. */
+  --color-fg: #1F1D19;
+  --color-muted: #6E675C;
+
+  /* Semantic. Separate from the accent on purpose: green means "this is the
+     product", not "this is fine". Danger and warning must never be mistaken
+     for accent, so they stay distinctly red and amber.
+
+     The border/surface pair were dark maroons for the dark theme and are
+     inverted here - on a cream ground they need to be pale tints or they
+     disappear. */
+  --color-danger: #B83D37;
+  --color-danger-border: #EFD3D1;
+  --color-danger-surface: #FBEEED;
+  --color-warning: #A8680F;
+
+  --radius-card: 14px;
 }
 
 @theme inline {
@@ -25,4 +57,18 @@ body {
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* The product animates the sidebar, page transitions, every button, and (once
+   job 4e lands) a layered parallax hero. None of that should move for someone
+   who has asked their OS not to. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
