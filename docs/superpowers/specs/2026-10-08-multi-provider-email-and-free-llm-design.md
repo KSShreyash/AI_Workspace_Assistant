@@ -932,7 +932,7 @@ service-role tables.
 22. **Hygiene.** Five unused scaffold SVGs in `frontend/public/`; two untracked strays
     in the repo root (`favicon.ico`, a 1.4 MB PNG); `requirements.txt` pins everything
     with `>=` and has no lockfile while mixing test deps into the production install;
-    `backend/.venv` has absolute paths from a previous location and should be recreated;
+    ~~`backend/.venv` has absolute paths from a previous location and should be recreated~~ - **retracted 2026-10-08.** Verified during job 0: `pytest.exe` and `uvicorn.exe` both run, and site-packages contains no stale references. The old paths seen in tracebacks came from `.pyc` bytecode caches, not the venv. Clearing `__pycache__` is sufficient; a rebuild is unnecessary churn. 
     `set_scheduled_calendar_event_id` (`action_items.py:104-108`) does not bump
     `updated_at` unlike `update_status`.
 
@@ -1088,21 +1088,23 @@ installed, so this costs one `npm i -D supabase`.
 cd "C:\Drive D\College\Projects\AI Workspace Assistant"
 npm i -D supabase
 npx supabase init          # creates supabase/config.toml; migrations/ already exists
-npx supabase start         # prints API URL, anon key, service_role key, DB URL
+npx supabase start --debug # prints API URL, anon key, service_role key, DB URL
 
 # 2. Apply all migrations to the local DB
 npx supabase db reset      # replays supabase/migrations/*.sql in order
 
-# 3. Backend venv - recreate, do not reuse (stale absolute paths, section 8.7/22)
+# 3. Backend deps. The existing .venv works - do NOT rebuild it (see 8.7/22).
+#    Just clear stale bytecode caches, which carry old folder paths into tracebacks.
 cd backend
-rm -rf .venv
-python -m venv .venv
+find . -name __pycache__ -type d -exec rm -rf {} +
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 
 # 4. Run backend + frontend
 .venv/Scripts/uvicorn app.main:app --reload --port 8000
 cd ../frontend && npm install && npm run dev        # http://localhost:3000
 ```
+
+> **Use `--debug` on the first run.** Without a TTY, the CLI's progress renderer buffers everything: `supabase start` produces zero output and pulls zero images for many minutes while appearing to work. It is not downloading - it is stuck. `--debug` bypasses the renderer and streams real pull progress. Verified 2026-10-08; the registry itself was reachable the whole time.
 
 `supabase start` prints the local keys — they are fixed, well-known development values,
 not secrets. Put them in `backend/.env` and `frontend/.env.local` per §11.6.
