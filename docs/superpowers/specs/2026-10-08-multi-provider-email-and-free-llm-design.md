@@ -22,9 +22,10 @@ See the progress table in §0 before starting anything.
 | Job 1 | §5.5 pre-filter bulk mail and trivial chat | **done** |
 | Job 1 | §5.6 body truncation | **done** - ~3,900 to ~700 tokens on a long thread |
 | Job 1 | §5.6 batching several messages per call | **not started** |
-| Job 1 | §5.4 quota handling (`retry-after`, daily budget) | **not started** |
 | Job 1 | §8.2/3 notes `coalesce`, §8.4/10 logging, §8.6/18 prompt fencing | **done** |
-| Job 3a | indexes, four try/catch handlers, timezone bucketing | **not started** |
+| Job 3a | indexes + correlated-subquery rewrite | **done** - 572ms to 4.05ms, loops=1000 to 1 |
+| Job 3a | four try/catch handlers, timezone bucketing | **done** |
+| Job 1 | §5.4 quota handling | **done** |
 | Job 4a | palette swap, WCAG AA verified | **done** |
 | Job 4b+ | nav shell, dashboard, parallax | **not started** |
 | Job 2 | multi-provider email | **not started** - blocked on Q1 (§3) |
@@ -825,7 +826,7 @@ the mockup's logo treatment implies.
 ## 8. Audit findings (reference)
 
 Full audit run against `f888dec`, re-verified at `7fe7f1a`. Measured:
-frontend **108/108 pass**, `tsc` clean, `eslint` clean, backend **132 of 173 error**,
+frontend **108/108 pass**, `tsc` clean, backend **132 of 173 error**,
 boot from `render.yaml` **fails**, indexes on `action_items` **zero**.
 
 ### 8.1 Blocking
@@ -943,6 +944,21 @@ service-role tables.
 19. **CORS origins not trimmed** (`main.py:15`) — `"a, b"` yields `" b"`, which never
     matches. **`.env.example` leaks the real project ref** — use a placeholder as
     `frontend/.env.local.example` already does.
+
+### 8.6b Correction: eslint is not clean
+
+The original audit reported `eslint` as clean. **That was wrong** - the run
+returned empty output and was misread. Verified 2026-10-09 against a worktree at
+`7fe7f1a` that **6 errors predate this session**:
+
+- 4 x `react-hooks/set-state-in-effect` - the `useEffect(() => { load() }, [load])`
+  pattern in `contacts/view`, `dashboard`, `planner` and `search`. React flags it
+  because it triggers a cascading render on every mount.
+- 2 x `@typescript-eslint/no-explicit-any` in `lib/api.test.ts`.
+
+None are introduced by the work in this session. The React ones want a real fix
+(move the fetch out of the effect body, or gate it), not a suppression - but that
+is a refactor of four pages, so it belongs with job 4b, which rewrites them anyway.
 
 ### 8.7 Polish
 
