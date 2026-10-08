@@ -590,9 +590,12 @@ Added 2026-10-08 from a supplied dashboard mockup plus a set of illustration ass
 
 ### 7.1 What the mockup specifies
 
-A complete visual reskin and a new information architecture, under the brand
-**"Candoor"** — warm cream ground, forest-green accent, terracotta secondary, soft
-pastel icon chips, and a painted autumn landscape behind the greeting.
+A complete visual reskin and a new information architecture: warm cream ground,
+forest-green accent, terracotta secondary, soft pastel icon chips, and a painted autumn
+landscape behind the greeting.
+
+The mockup is wordmarked "Candoor". **That name is not used** — the product is
+*AI Workspace Assistant* (§7.9). Take the mockup's visual direction, not its branding.
 
 **Navigation changes from 4 items to 7, plus a global search bar:**
 
@@ -726,23 +729,68 @@ alone is likely sufficient — avoid adding a second animation library for one e
 ```
 4a  Palette + tokens + color-scheme  (globals.css, ~13 lines)   <- ship first, zero risk
 4b  Nav shell: 7 items, next/link, global search bar, Settings page
-4c  Backend: new /api/dashboard aggregate contract + /api/emails
-4d  Dashboard widgets against the real contract
+4c  Backend: /api/dashboard aggregate contract      <- needs job 1 only
+4d  Dashboard widgets + charts against the real contract
 4e  Parallax hero + reduced-motion fallback
-4f  Insights + Calendar pages
+---- job 2 lands here ----
+4f  /api/emails + Emails page                       <- needs job 2
+4g  Insights + Calendar pages
 ```
 
-4a and 4b are independent of jobs 1 and 2 and can land immediately. **4c onward should
-follow job 2**, because the Emails page needs per-account attribution — building it
-single-account first means rebuilding it.
+> **Revised on re-review.** An earlier draft put *all* of 4c onward after job 2, on the
+> grounds that the Emails page needs per-account attribution. That is true of the Emails
+> page — and **only** of the Emails page. The dashboard aggregates (stat tiles,
+> week-over-week deltas, the 7-day series, the category donut) sum over whatever
+> accounts exist and need no schema knowledge of multi-account at all.
+>
+> Splitting them moves the visible, demo-able dashboard **before** the largest and
+> riskiest job instead of after it. For a project that is half interview artifact, that
+> ordering matters: 4a–4e delivers something worth showing without touching the schema.
 
-### 7.9 Naming
+4a and 4b are independent of every other job and can land immediately.
 
-The project now carries **four** different names: the folder is *AI Workspace
-Assistant*, the GitHub repo is *AI-Relationship-Manager*, the code and README say
-*AI Assistant* (commit `7fe7f1a`), and the mockup says **Candoor**. Pick one before
-job 4 touches user-facing strings, or the inconsistency gets baked into a fifth place.
-The mockup is the most considered of the four.
+### 7.9 Naming — DECIDED
+
+**The product name is "AI Workspace Assistant".** Matches the folder. The mockup's
+"Candoor" wordmark is **not** used — substitute the product name wherever the mockup
+shows it.
+
+**User-facing strings — only four, all one-line:**
+
+| File | Current |
+|---|---|
+| `backend/app/main.py:11` | `FastAPI(title="AI Assistant API")` |
+| `frontend/app/layout.tsx:18` | `title: "AI Assistant"` |
+| `frontend/app/components/NavBar.tsx:71` | sidebar wordmark |
+| `frontend/app/(auth)/login/page.tsx:56` | hero body copy |
+
+Plus one line in `README.md`.
+
+> ### Do **not** rename the infrastructure identifiers
+>
+> Three strings still carry the original `ai-relationship-manager`, and they are
+> **live infrastructure**, not branding:
+>
+> | File | String | Breaks if renamed |
+> |---|---|---|
+> | `render.yaml:3` | service `ai-relationship-manager-api` | changes the deployed hostname |
+> | `.github/workflows/graph-sync-cron.yml:14` | `ai-relationship-manager-api.onrender.com` | **the cron 404s silently** — it uses `curl -sf` (§8.4/10) |
+> | `render.yaml:25` | CORS origin `ai-relationship-manager.pages.dev` | the Cloudflare Pages project name; changing it blocks the frontend |
+>
+> These are invisible to users. Renaming them requires a coordinated change across
+> Render, Cloudflare Pages, and the workflow — and because the cron swallows failures,
+> a half-done rename looks exactly like a working one. If it is ever wanted, the order
+> is: create new service → update CORS origin **and** cron URL → verify a real sync
+> lands → delete the old. Not in scope for job 4.
+>
+> The GitHub repo name (`AI-Relationship-Manager`) is likewise cosmetic; GitHub
+> redirects old remote URLs, so renaming it is safe but unnecessary.
+
+**Sidebar fit.** "AI Workspace Assistant" is considerably longer than "Candoor". The
+collapsed rail (72 px) already hides the wordmark entirely
+(`{!collapsed && <span>…}`), so there is no truncation bug — but at the 224 px expanded
+width it is tight. Consider a short mark (monogram or icon) for the collapsed state, as
+the mockup's logo treatment implies.
 
 ---
 
@@ -912,19 +960,26 @@ Job 3a Quick independent wins (parallel with job 1)
 Job 4b Nav shell: 7 items, next/link, global search, Settings page   §7.8
        Absorbs five audit findings (§7.6). Independent of jobs 1 and 2.
    |
+Job 4c Backend: /api/dashboard aggregate contract                      §7.3
+       Needs job 1 only. Aggregates sum over whatever accounts exist.
+   |
+Job 4d Dashboard widgets, charts (hand-authored SVG, load `dataviz`)   §7.7
+Job 4e Parallax hero + prefers-reduced-motion fallback                 §7.7
+       >> 4a-4e gives a demo-able product before the riskiest job <<
+   |
 Q1     RESOLVE: is Google Calendar in scope?
    |
 Job 2  Multi-provider email                      §6
        connected_accounts migration, linkIdentity flow, gmail_client,
        provider-dispatching sync, advisory locking (§6.5)
    |
-Job 4c Backend aggregates: new /api/dashboard contract + /api/emails   §7.3
-       AFTER job 2 - the Emails page needs per-account attribution, and
-       building it single-account means rebuilding it.
+Job 4f /api/emails + Emails page                                       §7.8
+       AFTER job 2 - needs per-account attribution, else it gets rebuilt.
    |
-Job 4d Dashboard widgets, charts (hand-authored SVG, load `dataviz`)   §7.7
-Job 4e Parallax hero + prefers-reduced-motion fallback                 §7.7
-Job 4f Insights + Calendar pages
+Job 4g Insights + Calendar pages
+       Calendar needs one new repo method (list_between) + one route;
+       CalendarEventsRepository today has only upsert/delete/count/
+       list_busy_between. Insights scope is undefined - see §10.
    |
 Job 3b Remaining polish                          §8.7
 ```
@@ -956,13 +1011,16 @@ starting with job 1.
   main bulk signal? It is free and accurate, but it is the provider's judgement, so a
   genuine message misfiled as `other` would be skipped.
 - §9 — does the sequencing match your priorities?
-- **§7.9 — which name wins?** There are now four (folder / repo / code / mockup).
+- ~~§7.9 — which name wins?~~ **Resolved: "AI Workspace Assistant".**
 - **§7.3 — what makes a person "Important"?** The stat tile needs a definition:
   most-emailed, has open action items, or manually starred.
 - **§7.7 — animated parallax hero, or static `main.webp`?** The layered assets support
   parallax, but static is lighter, simpler, and never janky on a cold Render dyno.
-- §7.8 — is the "4c after job 2" ordering acceptable, or do you want a visible
-  dashboard sooner even if the Emails page gets rebuilt later?
+- **§7.1 — what goes on the Insights page?** It is the one nav item the mockup names but
+  never shows. Without a definition it cannot be planned. Candidates: response-time
+  trends, who you owe most, busiest senders, extraction accuracy over time. If nothing
+  compelling comes to mind, cut it from the nav — seven items with one empty is worse
+  than six that all work.
 
 **Change log for this document**
 
@@ -970,4 +1028,5 @@ starting with job 1.
 |---|---|
 | 1 | Initial design. |
 | 2 | Added **§5.8**, a pre-flight list of 15 verified collisions between planned changes and existing code. Corrected **§5.4** (quota state cannot reuse `sync_state` — CHECK constraint). Rewrote **§5.5** (Graph `internetMessageHeaders` requires `$select` on single-message GET, so the filter now uses provider-native classification instead). Specified the batch/transaction boundary in **§5.6**. Renamed `llm_batch_size` → `llm_messages_per_call` to avoid collision with the existing `extraction_batch_limit`. |
+| 4 | **Name resolved: "AI Workspace Assistant"** (not the mockup's "Candoor") — §7.9 now lists the four one-line code strings, and warns that the three remaining `ai-relationship-manager` strings are **live infrastructure**, not branding: renaming the Render service breaks the cron URL, which fails silently under `curl -sf`. **Re-ordered §7.8/§9** — an earlier draft deferred all dashboard work until after job 2; only the *Emails page* actually needs multi-account, so the dashboard aggregates now land before job 2, giving a demo-able product ahead of the riskiest job. Removed a duplicated Q1 gate. Added the Insights-scope question to §10. |
 | 3 | Added **job 4** (**§7**) from the supplied dashboard mockup and parallax assets: new 7-item IA, warm-light reskin, four new pages, charts, parallax hero. Key findings — the reskin itself is ~13 lines because no component hardcodes a colour (verified), but the dashboard needs data the backend does not produce; the Task/Meeting/FYI chips are derivable at **zero LLM cost** (§7.4); and `action_item.category` **must be added during job 1** or job 4 forces a full re-extraction (§7.5, now reflected in §5.3). Job 4 absorbs five audit findings (§7.6). **§9** sequencing rewritten to interleave job 4. |
