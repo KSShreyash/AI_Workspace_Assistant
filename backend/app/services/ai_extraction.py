@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import uuid
 from datetime import date
@@ -11,7 +12,15 @@ from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
 from app.services import openai_client
 
+logger = logging.getLogger(__name__)
+
 _UNBOUNDED = 1_000_000
+
+# After this many failed attempts a message is abandoned rather than re-queued.
+# Without a bound, a message that can never be extracted is re-fetched forever,
+# and because the pending query is oldest-first with a limit, enough of them
+# permanently fill the window and starve newer mail.
+_MAX_EXTRACTION_ATTEMPTS = 3
 
 _TABLES = {
     "email": "emails",
@@ -112,15 +121,42 @@ async def _process_item(
             )
 
 
+async def _record_extraction_failure(
+    pool: asyncpg.Pool, table: str, source_id: uuid.UUID, exc: Exception
+) -> None:
+    """Count the attempt and keep the reason.
+
+    Once the count reaches _MAX_EXTRACTION_ATTEMPTS the pending query stops
+    selecting the row, so it leaves the queue without ever being marked
+    successfully extracted.
+    """
+    await pool.execute(
+        f"""
+        update public.{table}
+        set extraction_attempts = extraction_attempts + 1,
+            extraction_error = $2
+        where id = $1
+        """,
+        source_id,
+        f"{type(exc).__name__}: {exc}"[:500],
+    )
+    logger.warning(
+        "Extraction failed for %s %s: %s", table, source_id, exc, exc_info=True
+    )
+
+
 async def _extract_pending_emails(
     pool: asyncpg.Pool, user_id: uuid.UUID, own_email: str | None, limit: int | None
 ) -> int:
+    table = "emails"
     rows = await pool.fetch(
         "select id, from_address, subject, body_text from public.emails "
         "where user_id = $1 and extracted_at is null "
+        "and extraction_attempts < $3 "
         "order by received_at asc nulls last limit $2",
         user_id,
         limit if limit is not None else _UNBOUNDED,
+        _MAX_EXTRACTION_ATTEMPTS,
     )
     processed = 0
     for row in rows:
@@ -130,7 +166,8 @@ async def _extract_pending_emails(
                 pool, user_id, "email", row["id"], content,
                 [(row["from_address"], None)], own_email,
             )
-        except Exception:
+        except Exception as exc:
+            await _record_extraction_failure(pool, table, row["id"], exc)
             continue
         processed += 1
     return processed
@@ -139,12 +176,15 @@ async def _extract_pending_emails(
 async def _extract_pending_calendar_events(
     pool: asyncpg.Pool, user_id: uuid.UUID, own_email: str | None, limit: int | None
 ) -> int:
+    table = "calendar_events"
     rows = await pool.fetch(
         "select id, organizer, attendees, subject, body_text from public.calendar_events "
         "where user_id = $1 and extracted_at is null "
+        "and extraction_attempts < $3 "
         "order by start_time asc nulls last limit $2",
         user_id,
         limit if limit is not None else _UNBOUNDED,
+        _MAX_EXTRACTION_ATTEMPTS,
     )
     processed = 0
     for row in rows:
@@ -179,7 +219,8 @@ async def _extract_pending_calendar_events(
             participants = list(by_email.values()) + no_email
 
             await _process_item(pool, user_id, "calendar_event", row["id"], content, participants, own_email)
-        except Exception:
+        except Exception as exc:
+            await _record_extraction_failure(pool, table, row["id"], exc)
             continue
         processed += 1
     return processed
@@ -188,12 +229,15 @@ async def _extract_pending_calendar_events(
 async def _extract_pending_chat_messages(
     pool: asyncpg.Pool, user_id: uuid.UUID, own_email: str | None, limit: int | None
 ) -> int:
+    table = "chat_messages"
     rows = await pool.fetch(
         "select id, from_user, content from public.chat_messages "
         "where user_id = $1 and extracted_at is null "
+        "and extraction_attempts < $3 "
         "order by sent_at asc nulls last limit $2",
         user_id,
         limit if limit is not None else _UNBOUNDED,
+        _MAX_EXTRACTION_ATTEMPTS,
     )
     processed = 0
     for row in rows:
@@ -203,7 +247,8 @@ async def _extract_pending_chat_messages(
                 pool, user_id, "chat_message", row["id"], content,
                 [(None, row["from_user"])], own_email,
             )
-        except Exception:
+        except Exception as exc:
+            await _record_extraction_failure(pool, table, row["id"], exc)
             continue
         processed += 1
     return processed

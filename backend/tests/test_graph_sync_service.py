@@ -601,3 +601,33 @@ async def test_sync_user_still_attempts_extraction_when_a_resource_sync_fails(po
             await sync_user(pool, user_id)
 
     mock_extract_user.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_user_logs_when_extraction_fails(pool, test_auth_user, caplog):
+    """A broken extraction pass must not vanish silently.
+
+    extract_user is wrapped in `except Exception: pass`, so the AI pipeline can
+    fail on every sync - every 15 minutes, for every user - without producing a
+    single signal. Swallowing is the right behaviour (a failed extraction should
+    not fail the whole sync) but it has to say so.
+    """
+    import logging
+
+    user_id, _ = test_auth_user
+
+    async def no_op_sync(pool_arg, uid, token):
+        return None
+
+    with caplog.at_level(logging.ERROR), \
+         patch("app.services.graph_sync.get_valid_access_token", return_value="tok"), \
+         patch("app.services.graph_sync.sync_mail", side_effect=no_op_sync), \
+         patch("app.services.graph_sync.sync_calendar", side_effect=no_op_sync), \
+         patch("app.services.graph_sync.sync_chat", side_effect=no_op_sync), \
+         patch(
+             "app.services.graph_sync.extract_user",
+             side_effect=RuntimeError("extraction blew up"),
+         ):
+        await sync_user(pool, user_id)
+
+    assert "extraction blew up" in caplog.text, "extraction failure was not logged"

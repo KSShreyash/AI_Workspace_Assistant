@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -103,3 +104,37 @@ async def test_run_bulk_syncs_all_connected_users_with_isolation(
         # connected profile behind for the next test's bulk run.
         for uid in (user_id, second_user_id):
             await profiles.set_graph_connection_status(uid, "disconnected")
+
+
+@pytest.mark.asyncio
+async def test_run_bulk_logs_why_a_user_failed(pool, test_auth_user, caplog):
+    """A failed per-user sync must leave a trace.
+
+    The bulk endpoint reports {"synced": n, "failed": n} and swallows the
+    exception, so a user whose sync breaks every 15 minutes is invisible: the
+    cron reports a number with no reason, and the cron itself uses `curl -sf`,
+    which hides non-200s too. The count is not enough to diagnose anything.
+    """
+    user_id, email = test_auth_user
+    profiles = ProfilesRepository(pool)
+    try:
+        await profiles.upsert(user_id, email)
+        await profiles.set_graph_connection_status(user_id, "connected")
+
+        async def boom(pool_arg, uid):
+            raise RuntimeError("graph exploded")
+
+        with caplog.at_level(logging.ERROR), \
+             patch("app.api.v1.sync.sync_user", side_effect=boom):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/api/sync/run", headers={"X-Sync-Secret": settings.sync_secret}
+                )
+
+        assert response.status_code == 200
+        assert response.json()["failed"] >= 1
+        assert "graph exploded" in caplog.text, "the failure reason was not logged"
+        assert str(user_id) in caplog.text, "the log does not say which user failed"
+    finally:
+        await profiles.set_graph_connection_status(user_id, "disconnected")

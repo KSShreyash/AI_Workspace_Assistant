@@ -1,3 +1,4 @@
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,8 @@ from app.repositories.sync_state import SyncStateRepository
 from app.services import graph_client
 from app.services.ai_extraction import extract_user
 from app.services.graph_tokens_service import get_valid_access_token, refresh_and_persist
+
+logger = logging.getLogger(__name__)
 
 BACKFILL_DAYS = 30
 CALENDAR_LOOKAHEAD_DAYS = 90
@@ -208,7 +211,11 @@ async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
     try:
         await extract_user(pool, user_id, settings.extraction_batch_limit)
     except Exception:
-        pass
+        # Deliberately not re-raised: a failed extraction should not fail the
+        # sync that already succeeded in fetching the messages. But it must be
+        # visible, or the AI pipeline can break on every run for every user and
+        # produce no signal at all.
+        logger.exception("Extraction failed after sync for user %s", user_id)
 
     if errors:
         raise errors[0]

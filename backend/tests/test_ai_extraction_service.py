@@ -349,3 +349,90 @@ async def test_extract_user_isolates_per_item_failures(pool, test_auth_user):
     )
     assert failed_row["extracted_at"] is None
     assert ok_row["extracted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_permanently_failing_item_stops_being_retried(pool, test_auth_user):
+    """A message that can never be extracted must drain out of the queue.
+
+    Failures are swallowed without recording anything, so the row keeps
+    extracted_at null and is re-fetched on every run. Because the pending query
+    orders oldest-first with a limit, a handful of such rows sit permanently at
+    the head of the queue and newer mail is never reached - and under a daily
+    token budget they consume the whole quota on messages that cannot succeed.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
+        values ($1, 'poison-1', 'sender@example.com', 'Subject', 'Body')
+        """,
+        user_id,
+    )
+
+    with patch(
+        "app.services.ai_extraction.openai_client.extract",
+        side_effect=RuntimeError("model always fails on this one"),
+    ) as mock_extract:
+        for _ in range(5):
+            await extract_user(pool, user_id, 10)
+
+    # After a bounded number of attempts the item must no longer be dispatched.
+    assert mock_extract.call_count <= 3, (
+        f"item was retried {mock_extract.call_count} times; it should stop after 3"
+    )
+
+    row = await pool.fetchrow(
+        "select extraction_attempts, extraction_error, extracted_at "
+        "from public.emails where graph_message_id = 'poison-1'"
+    )
+    assert row["extraction_attempts"] == 3, "attempts were not recorded"
+    assert "model always fails" in row["extraction_error"], "failure reason was not kept"
+    # extracted_at stays null on purpose: the message genuinely was never
+    # extracted. Stamping it would make "extracted" untrue and would hide the
+    # row from any future re-extraction pass. The attempts cap, not
+    # extracted_at, is what removes it from the queue.
+    assert row["extracted_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_failing_items_do_not_starve_newer_mail(pool, test_auth_user):
+    """Failures must not permanently occupy the batch window.
+
+    The pending query is `order by received_at asc ... limit N`. With N failing
+    messages older than everything else, they fill the window on every run and
+    newer mail is never reached. Seeding exactly `limit` poison messages ahead
+    of one healthy message reproduces that; the healthy one is only processed
+    once failures stop being re-queued.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text, received_at)
+        values ($1, 'poison-a', 's@example.com', 'Bad', 'Body', now() - interval '5 days'),
+               ($1, 'poison-b', 's@example.com', 'Bad', 'Body', now() - interval '4 days'),
+               ($1, 'poison-c', 's@example.com', 'Bad', 'Body', now() - interval '3 days'),
+               ($1, 'healthy-1', 'other@example.com', 'Good', 'Body', now() - interval '1 day')
+        """,
+        user_id,
+    )
+
+    calls = {"n": 0}
+
+    async def flaky(content, participants):
+        calls["n"] += 1
+        if "Bad" in content:
+            raise RuntimeError("cannot extract this one")
+        return {"people": [], "action_items": []}
+
+    # limit=3 matches the three poison messages, so they exactly fill the window.
+    with patch("app.services.ai_extraction.openai_client.extract", side_effect=flaky):
+        for _ in range(6):
+            await extract_user(pool, user_id, 3)
+
+    healthy_extracted = await pool.fetchval(
+        "select extracted_at is not null from public.emails where graph_message_id = 'healthy-1'"
+    )
+    assert healthy_extracted is True, "healthy message never processed - queue was starved"
