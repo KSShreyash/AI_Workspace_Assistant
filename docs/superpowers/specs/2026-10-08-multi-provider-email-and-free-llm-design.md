@@ -1,12 +1,38 @@
 # Multi-Provider Email + Free LLM — Design
 
 **Date:** 2026-10-08
-**Status:** Design. Awaiting review. No implementation started.
+**Status:** Job 0 complete. Job 1 largely implemented. Job 4a complete.
+See the progress table in §0 before starting anything.
 **Baseline commit:** `7fe7f1a`
 
 ---
 
 ## 0. How to resume this work (read first)
+
+### Progress as of 2026-10-09
+
+| | Item | State |
+|---|---|---|
+| Job 0 | Local Postgres via Supabase CLI, migrations, hermetic tests | **done** - 213 backend tests pass with no network |
+| Job 0 | `render.yaml` boots | **done** - verified by simulating Render's env |
+| Job 0 | Cloud deploy (Supabase / Render / Pages) | **not started** - needs your accounts, see §11.4 |
+| Job 1 | §5.1 provider behind config (Groq) | **done** |
+| Job 1 | §5.2 bounded retries, no poison-pill starvation | **done** |
+| Job 1 | §5.3 Pydantic validation + `action_items.category` | **done** |
+| Job 1 | §5.5 pre-filter bulk mail and trivial chat | **done** |
+| Job 1 | §5.6 body truncation | **done** - ~3,900 to ~700 tokens on a long thread |
+| Job 1 | §5.6 batching several messages per call | **not started** |
+| Job 1 | §5.4 quota handling (`retry-after`, daily budget) | **not started** |
+| Job 1 | §8.2/3 notes `coalesce`, §8.4/10 logging, §8.6/18 prompt fencing | **done** |
+| Job 3a | indexes, four try/catch handlers, timezone bucketing | **not started** |
+| Job 4a | palette swap, WCAG AA verified | **done** |
+| Job 4b+ | nav shell, dashboard, parallax | **not started** |
+| Job 2 | multi-provider email | **not started** - blocked on Q1 (§3) |
+
+Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
+`cd backend && .venv/Scripts/python.exe -m pytest -q`. Only the database
+container runs; see the note in §11.3 about Auth not starting.
+
 
 This document is the durable handoff. It is committed to git, so it is readable from
 any machine, any Claude Code account, and any fresh session.
