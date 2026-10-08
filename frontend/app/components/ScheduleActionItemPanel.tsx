@@ -44,12 +44,21 @@ export default function ScheduleActionItemPanel({
     setOpen(true)
     setError(null)
     setSlots(null)
-    const response = await apiFetch(`/api/action-items/${itemId}/schedule-suggestions`)
-    if (!response.ok) {
+    try {
+      const response = await apiFetch(`/api/action-items/${itemId}/schedule-suggestions`)
+      if (!response.ok) {
+        // Set slots to [] rather than leaving it null. null also means "still
+        // loading", so the panel used to render the error above a spinner that
+        // would never resolve.
+        setError('Could not load suggested times. Please try again.')
+        setSlots([])
+        return
+      }
+      setSlots(await response.json())
+    } catch {
       setError('Could not load suggested times. Please try again.')
-      return
+      setSlots([])
     }
-    setSlots(await response.json())
   }
 
   function closePanel() {
@@ -59,19 +68,29 @@ export default function ScheduleActionItemPanel({
   async function confirm(slot: Slot) {
     setError(null)
     setSubmitting(true)
-    const response = await apiFetch(`/api/action-items/${itemId}/schedule`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start: slot.start, end: slot.end, online_meeting: onlineMeeting }),
-    })
-    if (!response.ok) {
+    try {
+      const response = await apiFetch(`/api/action-items/${itemId}/schedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start: slot.start, end: slot.end, online_meeting: onlineMeeting }),
+      })
+      if (!response.ok) {
+        setError(
+          response.status === 409
+            ? 'That item was already scheduled. Refresh to see the booking.'
+            : 'Could not schedule that meeting. Please try again.'
+        )
+        return
+      }
+      setOpen(false)
+      onScheduled()
+    } catch {
+      // Without this, a rejected fetch left `submitting` true forever and every
+      // slot stayed disabled, making the panel unusable until a page reload.
       setError('Could not schedule that meeting. Please try again.')
+    } finally {
       setSubmitting(false)
-      return
     }
-    setSubmitting(false)
-    setOpen(false)
-    onScheduled()
   }
 
   return (

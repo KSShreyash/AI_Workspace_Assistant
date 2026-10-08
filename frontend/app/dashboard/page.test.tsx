@@ -227,3 +227,50 @@ describe('DashboardPage', () => {
     expect(screen.queryByText(/open of .* total/)).not.toBeInTheDocument()
   })
 })
+
+describe('DashboardPage trigger failures', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    pushMock.mockReset()
+  })
+
+  function mockLoadedDashboard(onTrigger: (path: string) => Promise<Response>) {
+    apiFetchMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return onTrigger(path)
+      if (path === '/api/me/graph-status') {
+        return Promise.resolve(jsonResponse({ connected: true, graph_me: { mail: 'me@example.com' } }))
+      }
+      if (path === '/api/dashboard') return Promise.resolve(jsonResponse(DASHBOARD_BODY))
+      if (path === '/api/action-items?include_done=true') {
+        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+  }
+
+  it('re-enables the buttons when a sync request rejects', async () => {
+    // A rejected fetch left `pending` set forever, so both buttons stayed
+    // disabled until a full page reload. The slowest call in the app is the one
+    // most likely to hit this: /api/sync/run/me does a full Graph sync plus
+    // extraction inline on a free-tier dyno.
+    mockLoadedDashboard(() => Promise.reject(new Error('network down')))
+    render(<DashboardPage />)
+
+    const syncButton = await screen.findByRole('button', { name: /sync now/i })
+    await userEvent.click(syncButton)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /sync now/i })).not.toBeDisabled()
+    })
+  })
+
+  it('tells the user when a trigger fails instead of failing silently', async () => {
+    mockLoadedDashboard(() => Promise.reject(new Error('network down')))
+    render(<DashboardPage />)
+
+    const syncButton = await screen.findByRole('button', { name: /sync now/i })
+    await userEvent.click(syncButton)
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+})

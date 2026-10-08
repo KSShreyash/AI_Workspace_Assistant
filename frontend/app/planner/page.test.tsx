@@ -174,3 +174,81 @@ describe('PlannerPage', () => {
     expect(screen.getByText(/scheduled:/i)).toBeInTheDocument()
   })
 })
+
+describe('PlannerPage failure handling and local dates', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    pushMock.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('surfaces an error when toggling an item rejects', async () => {
+    // toggleDone had no try/catch, so a rejected fetch threw past React as an
+    // unhandled rejection while the UI showed nothing at all - even though a
+    // toggleError state exists for exactly this.
+    apiFetchMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') return Promise.reject(new Error('network down'))
+      return Promise.resolve(
+        jsonResponse([
+          {
+            id: 'i1', text: 'Send the deck', direction: 'mine', status: 'open',
+            due_date: null, contact: null, scheduled_calendar_event_id: null,
+            scheduled_start_time: null, created_at: '2026-07-17T10:00:00Z',
+            updated_at: '2026-07-17T10:00:00Z',
+          },
+        ])
+      )
+    })
+
+    render(<PlannerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: /no date/i }))
+    const checkbox = await screen.findByRole('checkbox', { name: /mark done/i })
+    fireEvent.click(checkbox)
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+
+  it('buckets by the local calendar date, not the UTC one', async () => {
+    // "Today" was derived from Date.UTC, so for any user east of UTC a task due
+    // on their today landed under Tomorrow (and west of UTC, the reverse).
+    // 2026-07-17 22:00 UTC-5 is still the 17th locally, but the 18th in UTC.
+    // Pick an instant where the local calendar date and the UTC one disagree,
+    // whichever side of UTC this machine sits on. East of UTC, late-evening UTC
+    // is already tomorrow locally; west of UTC, early-morning UTC is still
+    // yesterday. Without this the test silently passes on machines whose dates
+    // happen to line up, proving nothing.
+    const offsetMinutes = -new Date('2026-07-17T12:00:00Z').getTimezoneOffset()
+    if (offsetMinutes === 0) return // UTC machine: the bug cannot manifest
+    const instant = offsetMinutes > 0 ? '2026-07-17T23:30:00Z' : '2026-07-17T00:30:00Z'
+
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(instant))
+
+    const localDate = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD, local
+    const utcDate = new Date().toISOString().slice(0, 10)
+    expect(localDate).not.toBe(utcDate) // the divergence this test depends on
+
+    apiFetchMock.mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse([
+          {
+            id: 'i1', text: 'Due today locally', direction: 'mine', status: 'open',
+            due_date: localDate, contact: null, scheduled_calendar_event_id: null,
+            scheduled_start_time: null, created_at: '2026-07-17T10:00:00Z',
+            updated_at: '2026-07-17T10:00:00Z',
+          },
+        ])
+      )
+    )
+
+    render(<PlannerPage />)
+    const todayTab = await screen.findByRole('button', { name: /^today/i })
+
+    await waitFor(() => {
+      expect(todayTab.textContent).toMatch(/1/)
+    })
+  })
+})

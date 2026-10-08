@@ -109,13 +109,22 @@ export default function DashboardPage() {
     setPending(kind)
     setTriggerError(null)
     const path = kind === 'sync' ? '/api/sync/run/me' : '/api/extraction/run/me'
-    const response = await apiFetch(path, { method: 'POST' })
-    setPending(null)
-    if (!response.ok) {
+    try {
+      const response = await apiFetch(path, { method: 'POST' })
+      if (!response.ok) {
+        setTriggerError('Something went wrong running that. Please try again.')
+        return
+      }
+      await loadDashboard()
+    } catch {
+      // A rejected fetch previously skipped setPending(null) entirely, leaving
+      // both buttons disabled until a full page reload. Sync is the slowest
+      // call in the app - a full Graph sync plus extraction, inline - so it is
+      // the one most likely to time out and trigger this.
       setTriggerError('Something went wrong running that. Please try again.')
-      return
+    } finally {
+      setPending(null)
     }
-    await loadDashboard()
   }
 
   if (status.state === 'loading') {

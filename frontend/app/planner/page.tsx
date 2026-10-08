@@ -35,10 +35,30 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'completed', label: 'Completed' },
 ]
 
+/**
+ * Parse a YYYY-MM-DD due date as a date on the user's own calendar.
+ *
+ * `new Date('2026-07-17')` is parsed as UTC midnight, which in any timezone
+ * behind UTC is still the 16th locally - so rendering it shows the wrong day.
+ * Constructing from the parts gives local midnight instead.
+ */
+export function parseDueDate(dateStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+/**
+ * Whole days between today and a due date, both on the user's local calendar.
+ *
+ * Previously both sides were computed in UTC. For anyone east of UTC that put a
+ * task due today into Tomorrow once local time passed midnight, and for anyone
+ * west of UTC it did the reverse - while the date badge on the same row used a
+ * different basis again, so the bucket and the badge could disagree.
+ */
 function daysFromNow(dateStr: string): number {
-  const due = new Date(dateStr + 'T00:00:00Z')
-  const today = new Date()
-  const startOfToday = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
+  const due = parseDueDate(dateStr)
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   return Math.round((due.getTime() - startOfToday.getTime()) / (1000 * 60 * 60 * 24))
 }
 
@@ -92,16 +112,22 @@ export default function PlannerPage() {
   async function toggleDone(item: ActionItem) {
     setToggleError(null)
     const nextStatus = item.status === 'open' ? 'done' : 'open'
-    const response = await apiFetch(`/api/action-items/${item.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    })
-    if (!response.ok) {
+    try {
+      const response = await apiFetch(`/api/action-items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      })
+      if (!response.ok) {
+        setToggleError('Something went wrong updating that item. Please try again.')
+        return
+      }
+      await load()
+    } catch {
+      // Previously the rejection escaped past React entirely and the user saw
+      // nothing, despite toggleError existing for exactly this case.
       setToggleError('Something went wrong updating that item. Please try again.')
-      return
     }
-    await load()
   }
 
   const buckets: Record<TabKey, ActionItem[]> = {
@@ -144,7 +170,7 @@ export default function PlannerPage() {
         </div>
         {item.due_date && (
           <Badge variant={badgeVariant}>
-            {new Date(item.due_date + 'T00:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            {parseDueDate(item.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
           </Badge>
         )}
         {!isDone && (
