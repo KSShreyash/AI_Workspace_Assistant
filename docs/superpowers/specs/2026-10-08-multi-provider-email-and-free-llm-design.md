@@ -198,11 +198,18 @@ llm_api_key: str
 llm_base_url: str = "https://api.groq.com/openai/v1"
 llm_model: str = "openai/gpt-oss-20b"
 llm_max_body_chars: int = 1500
-llm_batch_size: int = 5
+llm_messages_per_call: int = 5
 extraction_daily_token_budget: int = 180_000   # 200K with headroom
 ```
 
-`openai_api_key` is removed. `_SCHEMA` is unchanged — already strict-compatible
+**Naming matters here.** `extraction_batch_limit` already exists (= items processed per
+sync run, used at `graph_sync.py:209`). The new knob is messages per *LLM call* — a
+different concept. Hence `llm_messages_per_call`, not `llm_batch_size`, which would be
+confusable with the existing setting. Leave `extraction_batch_limit` alone.
+
+`openai_api_key` is removed — it appears in `config.py:16`, `openai_client.py:53`,
+`backend/.env`, `backend/.env.example`, and must be added to `render.yaml`, which
+currently omits it entirely (§8.1). `_SCHEMA` is unchanged — already strict-compatible
 (every property in `required`, `additionalProperties: false` at every level).
 
 **Model choice:** `openai/gpt-oss-20b`. All three strict-mode models share identical
@@ -269,8 +276,16 @@ Current behaviour (`openai_client.py:90–94`): catch `RateLimitError`, sleep a 
 in hours — retrying burns requests against a wall.
 
 1. Read `retry-after` and `x-ratelimit-remaining-tokens` from the 429 response.
-2. Add a `extraction_quota_state` table (or reuse `sync_state`) recording
-   `quota_exhausted_until timestamptz`.
+2. Add a **new** `llm_quota_state` table recording `quota_exhausted_until timestamptz`
+   and `tokens_used_today`, keyed by day.
+
+   > **Correction.** An earlier draft suggested reusing `sync_state` for this. That is
+   > not possible: `sync_state.resource_type` carries
+   > `check (resource_type in ('mail', 'calendar', 'chat'))`
+   > (`20260716000000_graph_sync_schema.sql:52`), so inserting a `'quota'` row fails the
+   > constraint. Reusing it would require an `alter table ... drop constraint` migration
+   > to widen an unrelated table's domain. A dedicated table is cleaner and avoids
+   > overloading a column that means "which Graph resource".
 3. `extract_user` returns early while the quota is exhausted — no API calls at all.
 4. Track tokens consumed per day against `extraction_daily_token_budget` and stop
    proactively before hitting the hard cap.
@@ -285,28 +300,83 @@ def should_extract(email_row) -> tuple[bool, str | None]:
     """Return (should_extract, skip_reason)."""
 ```
 
-Skip when any of:
+**Design revised after checking the Graph docs.** An earlier draft made RFC-5322
+headers (`List-Unsubscribe`, `Precedence`) the primary signal. That is the wrong
+mechanism here: Graph documents `internetMessageHeaders` as *"Requires `$select` to
+retrieve"*, and directs you to apply `$select` in a **get message** (single-item)
+operation — not a collection or delta query. Depending on it would mean an extra
+per-message API call, and it cannot work retroactively on the mail already synced.
 
-- A `List-Unsubscribe` or `List-Id` header is present (requires storing headers — see
-  below)
-- `Precedence: bulk | list | junk`
+Both providers already classify bulk mail themselves, for free, in fields returned by
+default. Use those instead, in tiers:
+
+**Tier 1 — provider-agnostic, works on already-synced rows, no schema change**
+
 - Sender local-part matches `noreply|no-reply|donotreply|notifications?|mailer|bounce`
-- `auto-submitted` header present and not `no`
-- Body, after HTML stripping, is under ~40 characters
+- Subject matches common bulk markers (newsletter, unsubscribe, digest, receipt)
+- Body, after HTML stripping, under ~40 characters
 
-This needs headers that are not currently persisted. Add
-`headers jsonb not null default '{}'` to `emails` and populate from Graph /
-Gmail. Record the skip reason in `extraction_error` and stamp `extracted_at` so
-skipped mail does not re-queue.
+**Tier 2 — Microsoft-native, returned by default, zero extra API cost**
+
+- `inferenceClassification == "other"` — Microsoft's own focused/other relevance
+  classifier. This is the single strongest signal available and costs nothing.
+- `isDraft == true` — never extract from drafts
+- `importance == "low"`
+
+**Tier 3 — Gmail-native, free with `format=metadata`**
+
+- `labelIds` containing `CATEGORY_PROMOTIONS`, `CATEGORY_SOCIAL`, `CATEGORY_UPDATES`,
+  or `CATEGORY_FORUMS` — Gmail's equivalent classifier
+- `List-Unsubscribe`, which Gmail *does* return cheaply in the metadata payload
+
+The symmetry is deliberate: each provider's own bulk classifier does the heavy lifting,
+and Tier 1 is the shared floor that works even on historical rows.
+
+**Schema impact:** persist the cheap classification fields rather than a whole header
+blob — add `inference_classification text` and `provider_labels text[]` to `emails`.
+Drop the `headers jsonb` column from the plan; it is no longer load-bearing. (If headers
+are ever wanted later, fetch them per-message only for messages that survive the
+filter.)
+
+Record the skip reason in `extraction_error` and stamp `extracted_at` so skipped mail
+does not re-queue.
+
+**Retroactive application:** for rows already synced, only Tier 1 can run (the
+classification fields will be null). That is acceptable — Tier 1 alone removes the
+`noreply@` bulk, and a one-off re-sync repopulates the rest. The filter must therefore
+treat null classification fields as "unknown, do not skip" rather than assuming bulk.
 
 ### 5.6 Truncate and batch
 
 - Truncate the stripped body to `llm_max_body_chars` (default 1500), preserving the
   head — action items cluster near the top of a message.
-- Batch `llm_batch_size` messages per call. Each gets a stable `msg_id` in the prompt;
-  the schema gains a per-message grouping so results map back. One failed batch must
-  not poison all N messages — on batch failure, fall back to single-message calls for
-  that batch so one bad message is isolated.
+- Batch `llm_messages_per_call` messages per call. Each gets a stable `msg_id` in the
+  prompt; `_SCHEMA` gains a top-level `results` array keyed by `msg_id` so output maps
+  back to inputs.
+
+**Transaction boundary — specify this explicitly, it is the subtle part.** Today
+`_process_item` wraps one message's contacts, action items, and `extracted_at` stamp in
+a single transaction (`ai_extraction.py:79-112`). Batching must **not** widen that to
+cover N messages: one bad row would roll back four good ones and leave all five
+unstamped — recreating the poison-pill starvation that §5.2 exists to fix.
+
+The required shape is:
+
+```
+1. select a batch of N pending rows
+2. filter (§5.5), truncate (§5.6)
+3. ONE LLM call for the surviving messages
+4. parse + validate the whole response (§5.3)
+5. for each msg_id in the response:
+       open its OWN transaction -> write contacts + action items + stamp extracted_at
+```
+
+So: one network call per batch, one transaction per message. A malformed entry for one
+`msg_id` increments only that row's `extraction_attempts`.
+
+On a whole-call failure (429, timeout, unparseable response), fall back to
+single-message calls for that batch so one pathological message cannot block the other
+four — then the normal attempt-counter path retires it.
 
 ### 5.7 Testing (job 1)
 
@@ -318,7 +388,48 @@ All of this is unit-testable without a database:
 - Quota tracking — budget arithmetic, exhaustion, reset
 - Batch fallback — batch fails → N single calls, one bad message isolated
 
-Groq calls get mocked with `respx`, matching the existing test convention.
+**Mocking convention:** note that `tests/test_openai_client.py` uses
+`unittest.mock.patch`, not `respx` — `respx` is used by the *Graph* client tests. Follow
+the local convention of whichever module is under test rather than mixing them.
+
+---
+
+### 5.8 Pre-flight: existing code these changes break
+
+Verified against the tree at `7fe7f1a`. Each item is a concrete collision that will
+surface as a confusing failure if not handled deliberately. Read this before writing
+code.
+
+### Job 1 collisions
+
+| # | Collision | Fix |
+|---|---|---|
+| P1 | `tests/test_openai_client.py:29` and `:50` do `patch("app.services.openai_client._client", return_value=mock_client)`. §5.1 turns `_client` from a **factory function** into a **module-level instance** — `return_value=` only makes sense for a callable, so **both existing tests break immediately.** | Change to `patch.object(openai_client, "_client", mock_client)` (i.e. `new=`, not `return_value=`). Do this in the same commit as the client change. |
+| P2 | `tests/test_openai_client.py:38` asserts `kwargs["model"] == "gpt-4o-mini"`. | Assert against `settings.llm_model` so the test follows config instead of pinning a vendor. |
+| P3 | `sync_state.resource_type` CHECK constraint blocks storing quota state there. | New `llm_quota_state` table — see the correction in §5.4. |
+| P4 | `extraction_batch_limit` (items per run) vs the new messages-per-LLM-call knob are easily conflated. | Name the new one `llm_messages_per_call`; leave the existing setting untouched. See §5.1. |
+| P5 | `render.yaml` omits `OPENAI_API_KEY` **and** `SYNC_SECRET` today (§8.1), so it already cannot boot. Job 1 renames the LLM var on top of that. | Update the blueprint to `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, **and** add the missing `SYNC_SECRET`, in the same commit. |
+| P6 | Graph `internetMessageHeaders` requires `$select` and is documented for single-message GET. | Pre-filter uses provider-native classification instead — see the revised §5.5. |
+| P7 | Already-synced rows have no classification fields, so the filter cannot fully apply retroactively. | Tier 1 works on existing rows; null classification means "unknown, do not skip". See §5.5. |
+| P8 | Widening the transaction to cover a whole batch would re-create poison-pill starvation. | One LLM call per batch, one transaction per message. See §5.6. |
+| P9 | **No existing test covers notes-merge semantics** — `tests/test_contacts_repository.py:15` only passes `"notes"` as a value. So the §8.2 `coalesce` fix breaks nothing, but nothing protects it either. | Write a new test first: upsert with notes, re-upsert with `None`, assert the original survives. This is the TDD entry point for that fix. |
+
+### Job 2 collisions
+
+| # | Collision | Fix |
+|---|---|---|
+| P10 | **`profiles.graph_connection_status` is read or written in six places**: `auth.py:34`, `me.py:39/61/65`, `graph_tokens_service.py:27`, and `profiles.py:36-49`. Connection status becomes **per-account** under D1, so this column's meaning dissolves. | Move to `connected_accounts.connection_status` (already in the §6.2 schema). Migrate each call site to take an `account_id`. |
+| P11 | **`ProfilesRepository.list_connected()` (`sync.py:27`) drives the entire bulk cron.** It queries `profiles where graph_connection_status = 'connected'` — which no longer identifies what to sync. | Replace with a `connected_accounts` query returning `(user_id, account_id, provider)`, and have the cron iterate accounts rather than users. This is the single highest-risk edit in job 2: get it wrong and the cron silently syncs nothing. |
+| P12 | `/api/me/graph-status` returns one connected/`needs_reauth` state. The frontend's `GraphStatus` union (`dashboard/page.tsx:12-16`), its 409 handling (`:51-53`), and `NavBar.tsx:32-46` all assume exactly one account. | Endpoint returns a list of accounts with per-account status; dashboard renders "account X needs reconnecting" rather than a single page-level state. Frontend change is larger than it looks. |
+| P13 | `GraphTokensRepository` is consumed by `auth.py`, `me.py`, and `graph_tokens_service.py`; `tests/test_graph_tokens_service.py` targets it directly. Dropping `ms_graph_tokens` breaks all of them. | Introduce `ConnectedAccountsRepository`, port call sites, migrate data, *then* drop the table — in that order, as separate commits. |
+| P14 | `SyncStateRepository.get/upsert` take `user_id`; the PK change to `(account_id, resource_type)` changes both signatures, which ripples into `sync_mail`, `sync_calendar`, and `sync_chat`. | Expect to touch all three sync functions. Budget for it rather than discovering it. |
+| P15 | `emails.account_id` cannot be `not null` until backfilled. | Three-step migration: add nullable → backfill from the migrated `connected_accounts` row → `set not null`. Never one step. |
+
+### Ordering constraint
+
+P1/P2 must land **with** the client change, not after — otherwise the suite is red for
+the whole job and stops being a safety net. P9 must land **before** the notes fix, since
+it is the test that proves it. P13/P15 are strictly ordered as written.
 
 ---
 
@@ -371,7 +482,10 @@ Migrations:
 - `emails`: add `account_id uuid references connected_accounts(id) on delete cascade`;
   drop `unique (user_id, graph_message_id)`, add
   `unique (account_id, provider_message_id)`; rename `graph_message_id` →
-  `provider_message_id`; add `headers jsonb` (also needed by §5.5).
+  `provider_message_id`. Also add `provider_labels text[]` here if job 1 has not
+  already added it (§5.5) — Gmail's `labelIds` land in the same column Microsoft's
+  `inferenceClassification` complements. No `headers jsonb` column: §5.5 was revised to
+  use provider-native classification instead, so it is not needed.
 - `sync_state`: repoint to `primary key (account_id, resource_type)`.
 - `ms_graph_tokens`: migrate rows into `connected_accounts` with
   `provider='microsoft'`, `is_primary=true`, then drop the table.
@@ -633,6 +747,11 @@ Job 1 before job 2 is not arbitrary: job 1 establishes the token budget that job
 volume must fit inside, and shipping job 2 first would multiply mail volume into a
 pipeline that still burns its entire quota retrying items that can never succeed.
 
+**Before writing any code, read §5.8.** It lists 15 verified collisions between these
+planned changes and code that exists today — two of which turn the test suite red the
+moment the LLM client is touched, and two of which (P10/P11) will make the sync cron
+silently process nothing if handled carelessly.
+
 ---
 
 ## 10. Next step
@@ -643,8 +762,18 @@ starting with job 1.
 
 **Review checklist:**
 
-- §3 Q1 — is Google Calendar in or out of scope?
+- §3 Q1 — is Google Calendar in or out of scope? *(blocks job 2 only)*
 - §3 Q2 — keep the env-driven provider seam (D4)?
 - §4 — is a ~5-day backfill acceptable, or should the filter be more aggressive?
 - §5.2 — is 3 attempts before dropping an item right?
+- §5.5 — comfortable relying on `inferenceClassification` / Gmail `labelIds` as the
+  main bulk signal? It is free and accurate, but it is the provider's judgement, so a
+  genuine message misfiled as `other` would be skipped.
 - §9 — does the sequencing match your priorities?
+
+**Change log for this document**
+
+| Rev | Change |
+|---|---|
+| 1 | Initial design. |
+| 2 | Added **§5.8**, a pre-flight list of 15 verified collisions between planned changes and existing code. Corrected **§5.4** (quota state cannot reuse `sync_state` — CHECK constraint). Rewrote **§5.5** (Graph `internetMessageHeaders` requires `$select` on single-message GET, so the filter now uses provider-native classification instead). Specified the batch/transaction boundary in **§5.6**. Renamed `llm_batch_size` → `llm_messages_per_call` to avoid collision with the existing `extraction_batch_limit`. |
