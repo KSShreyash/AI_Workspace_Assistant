@@ -19,7 +19,20 @@ services:
         sync: false
       - key: MS_CLIENT_SECRET
         sync: false
+      # /common accepts both personal (outlook.com, hotmail) and work/school accounts
       - key: MS_AUTHORITY
         value: https://login.microsoftonline.com/common
+      # No space after the comma - Starlette compares origins literally, and a
+      # leading space would silently never match.
       - key: CORS_ALLOW_ORIGINS
         value: https://ai-relationship-manager.pages.dev,http://localhost:3000
+      # Required by Settings with no default - the service cannot boot without
+      # these two. Must match the SYNC_SECRET GitHub Actions secret used by
+      # .github/workflows/graph-sync-cron.yml.
+      - key: SYNC_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # Optional (defaults to 50). Caps items processed per extraction run.
+      - key: EXTRACTION_BATCH_LIMIT
+        value: "50"

@@ -1,0 +1,14 @@
+{
+  "name": "ai-workspace-assistant-tooling",
+  "private": true,
+  "description": "Repo-level tooling only. The app lives in frontend/ and backend/.",
+  "scripts": {
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:status": "supabase status"
+  },
+  "devDependencies": {
+    "supabase": "^2.120.0"
+  }
+}

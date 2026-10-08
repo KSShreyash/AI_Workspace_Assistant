@@ -12,3 +12,6 @@ frontend/.env.local
 frontend/dist/
 
 .DS_Store
+
+# root tooling (supabase CLI)
+node_modules/
