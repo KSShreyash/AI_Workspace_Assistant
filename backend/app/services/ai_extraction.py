@@ -7,6 +7,7 @@ from html import unescape
 
 import asyncpg
 
+from app.core.config import settings
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
@@ -36,6 +37,21 @@ def _strip_html(value: str | None) -> str | None:
     text = unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _truncate_body(value: str | None) -> str:
+    """Cap a message body before it reaches the model.
+
+    Truncates from the end deliberately: commitments and requests cluster near
+    the top of a message, while quoted reply chains and signatures accumulate at
+    the bottom. Keeping the head preserves the useful part.
+    """
+    if not value:
+        return ""
+    limit = settings.llm_max_body_chars
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n[truncated]"
 
 
 def _parse_due_date(value: str | None) -> date | None:
@@ -161,7 +177,7 @@ async def _extract_pending_emails(
     processed = 0
     for row in rows:
         try:
-            content = f"Subject: {row['subject'] or ''}\n\n{_strip_html(row['body_text']) or ''}"
+            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(_strip_html(row['body_text']))}"
             await _process_item(
                 pool, user_id, "email", row["id"], content,
                 [(row["from_address"], None)], own_email,
@@ -189,7 +205,7 @@ async def _extract_pending_calendar_events(
     processed = 0
     for row in rows:
         try:
-            content = f"Subject: {row['subject'] or ''}\n\n{_strip_html(row['body_text']) or ''}"
+            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(_strip_html(row['body_text']))}"
 
             raw_people: list[tuple[str | None, str | None]] = []
             if row["organizer"]:
@@ -242,7 +258,7 @@ async def _extract_pending_chat_messages(
     processed = 0
     for row in rows:
         try:
-            content = _strip_html(row["content"]) or ""
+            content = _truncate_body(_strip_html(row["content"]))
             await _process_item(
                 pool, user_id, "chat_message", row["id"], content,
                 [(None, row["from_user"])], own_email,

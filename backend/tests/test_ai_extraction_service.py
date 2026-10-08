@@ -436,3 +436,70 @@ async def test_failing_items_do_not_starve_newer_mail(pool, test_auth_user):
         "select extracted_at is not null from public.emails where graph_message_id = 'healthy-1'"
     )
     assert healthy_extracted is True, "healthy message never processed - queue was starved"
+
+
+@pytest.mark.asyncio
+async def test_long_message_body_is_truncated_before_the_llm_sees_it(pool, test_auth_user):
+    """Message bodies must be bounded before they reach the model.
+
+    Nothing caps body length today, so a newsletter or a long reply chain is
+    sent whole. On a free tier the binding limit is tokens per day, not
+    requests per day, so one unbounded message can consume a disproportionate
+    share of the daily budget - and the action items are almost always near the
+    top of a message anyway.
+    """
+    from app.core.config import settings
+
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    huge_body = "word " * 20000  # ~100k characters
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
+        values ($1, 'long-1', 'sender@example.com', 'Subject', $2)
+        """,
+        user_id,
+        huge_body,
+    )
+
+    captured = {}
+
+    async def capture(content, participants):
+        captured["content"] = content
+        return {"people": [], "action_items": []}
+
+    with patch("app.services.ai_extraction.openai_client.extract", side_effect=capture):
+        await extract_user(pool, user_id, 10)
+
+    assert "content" in captured, "extraction never ran"
+    # Allow headroom for the subject line and separators on top of the body cap.
+    assert len(captured["content"]) <= settings.llm_max_body_chars + 500, (
+        f"sent {len(captured['content'])} chars to the model; "
+        f"body cap is {settings.llm_max_body_chars}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_truncation_keeps_the_start_of_the_message(pool, test_auth_user):
+    """Truncate from the end: commitments cluster near the top of a message."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
+        values ($1, 'long-2', 'sender@example.com', 'Subject', $2)
+        """,
+        user_id,
+        "IMPORTANT FIRST LINE. " + ("filler " * 20000),
+    )
+
+    captured = {}
+
+    async def capture(content, participants):
+        captured["content"] = content
+        return {"people": [], "action_items": []}
+
+    with patch("app.services.ai_extraction.openai_client.extract", side_effect=capture):
+        await extract_user(pool, user_id, 10)
+
+    assert "IMPORTANT FIRST LINE." in captured["content"]

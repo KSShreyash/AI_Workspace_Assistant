@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_model: str = "openai/gpt-oss-20b"
 
+    # Message bodies are truncated to this many characters before being sent.
+    # On a free tier the binding limit is tokens per day, not requests per day,
+    # so one unbounded newsletter can eat a disproportionate share of the daily
+    # budget. Roughly 1500 chars is ~400 tokens.
+    llm_max_body_chars: int = 1500
+
     # Items processed per extraction run (not messages per LLM call - see
     # llm_messages_per_call when batching lands).
     extraction_batch_limit: int = 50
