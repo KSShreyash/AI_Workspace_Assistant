@@ -17,6 +17,10 @@ from app.repositories.profiles import ProfilesRepository
 
 async def _seed(pool, user_id, email):
     await ProfilesRepository(pool).upsert(user_id, email)
+    # conftest connects one mailbox for every test user, which is right for
+    # tests that need synced data to hang off something. These tests are about
+    # the accounts table itself, so they start from nothing.
+    await pool.execute("delete from public.connected_accounts where user_id = $1", user_id)
     return ConnectedAccountsRepository(pool)
 
 
@@ -73,6 +77,7 @@ async def test_the_same_mailbox_can_belong_to_two_different_users(pool, test_aut
     other_id, other_email = test_auth_user_2
     repo = await _seed(pool, user_id, email)
     await ProfilesRepository(pool).upsert(other_id, other_email)
+    await pool.execute("delete from public.connected_accounts where user_id = $1", other_id)
 
     for uid in (user_id, other_id):
         await repo.upsert(
@@ -130,6 +135,7 @@ async def test_accounts_never_leak_between_users(pool, test_auth_user, test_auth
     other_id, other_email = test_auth_user_2
     repo = await _seed(pool, user_id, email)
     await ProfilesRepository(pool).upsert(other_id, other_email)
+    await pool.execute("delete from public.connected_accounts where user_id = $1", other_id)
 
     await repo.upsert(
         user_id=other_id, provider="google", provider_account_id="g-other",

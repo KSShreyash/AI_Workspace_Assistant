@@ -12,7 +12,8 @@ class CalendarEventsRepository:
     async def upsert(
         self,
         user_id: uuid.UUID,
-        graph_event_id: str,
+        account_id: uuid.UUID,
+        provider_event_id: str,
         subject: str | None,
         organizer: str | None,
         attendees: list[dict],
@@ -27,11 +28,11 @@ class CalendarEventsRepository:
         row = await executor.fetchrow(
             """
             insert into public.calendar_events
-                (user_id, graph_event_id, subject, organizer, attendees,
+                (user_id, account_id, provider_event_id, subject, organizer, attendees,
                  start_time, end_time, is_online_meeting, online_meeting_join_url,
                  body_text, synced_at)
-            values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, now())
-            on conflict (user_id, graph_event_id) do update
+            values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, now())
+            on conflict (account_id, provider_event_id) do update
             set subject = excluded.subject,
                 organizer = excluded.organizer,
                 attendees = excluded.attendees,
@@ -44,7 +45,8 @@ class CalendarEventsRepository:
             returning id
             """,
             user_id,
-            graph_event_id,
+            account_id,
+            provider_event_id,
             subject,
             organizer,
             json.dumps(attendees),
@@ -56,11 +58,16 @@ class CalendarEventsRepository:
         )
         return row["id"]
 
-    async def delete(self, user_id: uuid.UUID, graph_event_id: str) -> None:
+    async def delete(self, *, account_id: uuid.UUID, provider_event_id: str) -> None:
+        """Scoped to the account, not the user.
+
+        Keyword-only on purpose: this used to be keyed by user_id, and a
+        stale positional call would silently match no rows rather than fail.
+        """
         await self._pool.execute(
-            "delete from public.calendar_events where user_id = $1 and graph_event_id = $2",
-            user_id,
-            graph_event_id,
+            "delete from public.calendar_events where account_id = $1 and provider_event_id = $2",
+            account_id,
+            provider_event_id,
         )
 
     async def count(self, user_id: uuid.UUID) -> int:

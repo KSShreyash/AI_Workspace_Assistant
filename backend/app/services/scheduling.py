@@ -113,7 +113,8 @@ async def create_meeting(
         async with conn.transaction():
             calendar_event_id = await CalendarEventsRepository(pool).upsert(
                 user_id=user_id,
-                graph_event_id=graph_event["id"],
+                account_id=account["id"],
+                provider_event_id=graph_event["id"],
                 subject=graph_event.get("subject"),
                 organizer=((graph_event.get("organizer") or {}).get("emailAddress") or {}).get("address"),
                 attendees=[(a.get("emailAddress") or {}) for a in graph_event.get("attendees", [])],

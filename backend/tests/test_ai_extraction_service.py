@@ -71,7 +71,7 @@ async def test_process_item_marks_extracted(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     row = await pool.fetchrow(
-        "insert into public.emails (user_id, graph_message_id) values ($1, $2) returning id",
+        "insert into public.emails (user_id, account_id, provider_message_id) values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2) returning id",
         user_id, "msg-1",
     )
     source_id = row["id"]
@@ -125,7 +125,7 @@ async def test_process_item_no_participants_skips_openai_but_still_marks_extract
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     row = await pool.fetchrow(
-        "insert into public.emails (user_id, graph_message_id) values ($1, $2) returning id",
+        "insert into public.emails (user_id, account_id, provider_message_id) values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2) returning id",
         user_id, "msg-2",
     )
     source_id = row["id"]
@@ -143,7 +143,7 @@ async def test_process_item_rolls_back_on_action_item_failure(pool, test_auth_us
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     row = await pool.fetchrow(
-        "insert into public.emails (user_id, graph_message_id) values ($1, $2) returning id",
+        "insert into public.emails (user_id, account_id, provider_message_id) values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2) returning id",
         user_id, "msg-3",
     )
     source_id = row["id"]
@@ -176,8 +176,8 @@ async def test_extract_user_processes_pending_email(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     row = await pool.fetchrow(
-        "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-        "values ($1, $2, $3, $4, $5) returning id",
+        "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5) returning id",
         user_id, "msg-x", "irene@example.com", "Hello", "<p>Could you review the draft and send feedback before Thursday?</p>",
     )
 
@@ -199,8 +199,8 @@ async def test_extract_user_processes_calendar_event_with_multiple_attendees(poo
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
-        "insert into public.calendar_events (user_id, graph_event_id, organizer, attendees, subject, body_text) "
-        "values ($1, $2, $3, $4::jsonb, $5, $6)",
+        "insert into public.calendar_events (user_id, account_id, provider_event_id, organizer, attendees, subject, body_text) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4::jsonb, $5, $6)",
         user_id, "evt-x", "jane@example.com",
         json_module.dumps([{"address": "jane@example.com", "name": "Jane"}, {"address": "kyle@example.com", "name": "Kyle"}]),
         "Sync", "Weekly sync",
@@ -225,8 +225,8 @@ async def test_extract_user_processes_chat_message_by_display_name(pool, test_au
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
-        "insert into public.chat_messages (user_id, graph_chat_id, graph_message_id, from_user, content) "
-        "values ($1, $2, $3, $4, $5)",
+        "insert into public.chat_messages (user_id, account_id, provider_chat_id, provider_message_id, from_user, content) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
         user_id, "chat-1", "cm-1", "Laura", "Can you send that file?",
     )
 
@@ -244,8 +244,8 @@ async def test_extract_user_respects_limit_across_tables(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     for i in range(3):
         await pool.execute(
-            "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-            "values ($1, $2, $3, $4, $5)",
+            "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+            "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
             user_id, f"msg-limit-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
 
@@ -266,14 +266,14 @@ async def test_extract_user_carries_remaining_budget_into_next_table(pool, test_
     await ProfilesRepository(pool).upsert(user_id, email)
     for i in range(2):
         await pool.execute(
-            "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-            "values ($1, $2, $3, $4, $5)",
+            "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+            "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
             user_id, f"msg-budget-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
     for i in range(2):
         await pool.execute(
-            "insert into public.chat_messages (user_id, graph_chat_id, graph_message_id, from_user, content) "
-            "values ($1, $2, $3, $4, $5)",
+            "insert into public.chat_messages (user_id, account_id, provider_chat_id, provider_message_id, from_user, content) "
+            "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
             user_id, "chat-budget", f"chat-msg-budget-{i}", f"Chatter{i}",
             "Please take over the release notes for this sprint.",
         )
@@ -304,8 +304,8 @@ async def test_extract_user_unbounded_processes_everything(pool, test_auth_user)
     await ProfilesRepository(pool).upsert(user_id, email)
     for i in range(3):
         await pool.execute(
-            "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-            "values ($1, $2, $3, $4, $5)",
+            "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+            "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
             user_id, f"msg-unbounded-{i}", f"person{i}@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
         )
 
@@ -324,13 +324,13 @@ async def test_extract_user_isolates_per_item_failures(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
-        "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-        "values ($1, $2, $3, $4, $5)",
+        "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
         user_id, "msg-fail", "fail@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
     )
     await pool.execute(
-        "insert into public.emails (user_id, graph_message_id, from_address, subject, body_text) "
-        "values ($1, $2, $3, $4, $5)",
+        "insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), $2, $3, $4, $5)",
         user_id, "msg-ok", "ok@example.com", "Hi", "Could you review the draft and send feedback before Thursday?",
     )
 
@@ -343,10 +343,10 @@ async def test_extract_user_isolates_per_item_failures(pool, test_auth_user):
         await extract_user(pool, user_id, limit=10)
 
     failed_row = await pool.fetchrow(
-        "select extracted_at from public.emails where user_id = $1 and graph_message_id = $2", user_id, "msg-fail"
+        "select extracted_at from public.emails where user_id = $1 and provider_message_id = $2", user_id, "msg-fail"
     )
     ok_row = await pool.fetchrow(
-        "select extracted_at from public.emails where user_id = $1 and graph_message_id = $2", user_id, "msg-ok"
+        "select extracted_at from public.emails where user_id = $1 and provider_message_id = $2", user_id, "msg-ok"
     )
     assert failed_row["extracted_at"] is None
     assert ok_row["extracted_at"] is not None
@@ -366,8 +366,8 @@ async def test_permanently_failing_item_stops_being_retried(pool, test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'poison-1', 'sender@example.com', 'Subject', 'Could you review the draft and send feedback before Thursday?')
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'poison-1', 'sender@example.com', 'Subject', 'Could you review the draft and send feedback before Thursday?')
         """,
         user_id,
     )
@@ -386,7 +386,7 @@ async def test_permanently_failing_item_stops_being_retried(pool, test_auth_user
 
     row = await pool.fetchrow(
         "select extraction_attempts, extraction_error, extracted_at "
-        "from public.emails where graph_message_id = 'poison-1'"
+        "from public.emails where provider_message_id = 'poison-1'"
     )
     assert row["extraction_attempts"] == 3, "attempts were not recorded"
     assert "model always fails" in row["extraction_error"], "failure reason was not kept"
@@ -411,11 +411,11 @@ async def test_failing_items_do_not_starve_newer_mail(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text, received_at)
-        values ($1, 'poison-a', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '5 days'),
-               ($1, 'poison-b', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '4 days'),
-               ($1, 'poison-c', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '3 days'),
-               ($1, 'healthy-1', 'other@example.com', 'Good', 'Could you review the draft and send feedback before Thursday?', now() - interval '1 day')
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text, received_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'poison-a', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '5 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'poison-b', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '4 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'poison-c', 's@example.com', 'Bad', 'Could you review the draft and send feedback before Thursday?', now() - interval '3 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'healthy-1', 'other@example.com', 'Good', 'Could you review the draft and send feedback before Thursday?', now() - interval '1 day')
         """,
         user_id,
     )
@@ -434,7 +434,7 @@ async def test_failing_items_do_not_starve_newer_mail(pool, test_auth_user):
             await extract_user(pool, user_id, 3)
 
     healthy_extracted = await pool.fetchval(
-        "select extracted_at is not null from public.emails where graph_message_id = 'healthy-1'"
+        "select extracted_at is not null from public.emails where provider_message_id = 'healthy-1'"
     )
     assert healthy_extracted is True, "healthy message never processed - queue was starved"
 
@@ -456,8 +456,8 @@ async def test_long_message_body_is_truncated_before_the_llm_sees_it(pool, test_
     huge_body = "word " * 20000  # ~100k characters
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'long-1', 'sender@example.com', 'Subject', $2)
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'long-1', 'sender@example.com', 'Subject', $2)
         """,
         user_id,
         huge_body,
@@ -487,8 +487,8 @@ async def test_truncation_keeps_the_start_of_the_message(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'long-2', 'sender@example.com', 'Subject', $2)
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'long-2', 'sender@example.com', 'Subject', $2)
         """,
         user_id,
         "IMPORTANT FIRST LINE. " + ("filler " * 20000),
@@ -582,10 +582,10 @@ async def test_bulk_mail_never_reaches_the_model(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text, received_at)
-        values ($1, 'bulk-1', 'noreply@example.com', 'Your weekly digest',
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text, received_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'bulk-1', 'noreply@example.com', 'Your weekly digest',
                 'Here is everything that happened this week, at length.', now() - interval '2 days'),
-               ($1, 'real-1', 'colleague@example.com', 'Re: Thursday',
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'real-1', 'colleague@example.com', 'Re: Thursday',
                 'Can you send the deck before Thursday please?', now() - interval '1 day')
         """,
         user_id,
@@ -616,8 +616,8 @@ async def test_filtered_mail_is_not_re_queued_every_run(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'bulk-2', 'notifications@example.com', 'Alert',
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'bulk-2', 'notifications@example.com', 'Alert',
                 'A long enough body to clear the minimum length rule easily.')
         """,
         user_id,
@@ -630,7 +630,7 @@ async def test_filtered_mail_is_not_re_queued_every_run(pool, test_auth_user):
     mock_extract.assert_not_called()
 
     row = await pool.fetchrow(
-        "select extracted_at, extraction_error from public.emails where graph_message_id = 'bulk-2'"
+        "select extracted_at, extraction_error from public.emails where provider_message_id = 'bulk-2'"
     )
     assert row["extracted_at"] is not None, "skipped mail still pending, will re-queue forever"
     assert "sender" in (row["extraction_error"] or "").lower(), "skip reason not recorded"
@@ -648,10 +648,10 @@ async def test_trivial_chat_messages_never_reach_the_model(pool, test_auth_user)
     await pool.execute(
         """
         insert into public.chat_messages
-            (user_id, graph_chat_id, graph_message_id, from_user, content, sent_at)
-        values ($1, 'c1', 'm1', 'Dana', 'ok', now() - interval '3 days'),
-               ($1, 'c1', 'm2', 'Dana', 'thanks!', now() - interval '2 days'),
-               ($1, 'c1', 'm3', 'Dana',
+            (user_id, account_id, provider_chat_id, provider_message_id, from_user, content, sent_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'c1', 'm1', 'Dana', 'ok', now() - interval '3 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'c1', 'm2', 'Dana', 'thanks!', now() - interval '2 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'c1', 'm3', 'Dana',
                 'Can you own the migration rollback plan before we ship?',
                 now() - interval '1 day')
         """,

@@ -67,11 +67,11 @@ async def test_ranks_busiest_correspondents(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, received_at)
-        values ($1, 'm1', 'loud@example.com', now()),
-               ($1, 'm2', 'loud@example.com', now()),
-               ($1, 'm3', 'loud@example.com', now()),
-               ($1, 'm4', 'quiet@example.com', now())
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, received_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'm1', 'loud@example.com', now()),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'm2', 'loud@example.com', now()),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'm3', 'loud@example.com', now()),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'm4', 'quiet@example.com', now())
         """,
         user_id,
     )
@@ -94,11 +94,11 @@ async def test_reports_pipeline_health(pool, test_auth_user):
     await pool.execute(
         """
         insert into public.emails
-            (user_id, graph_message_id, received_at, extracted_at, extraction_error, extraction_attempts)
-        values ($1, 'ok1',      now(), now(), null, 0),
-               ($1, 'skipped1', now(), now(), 'skipped: sender looks automated', 0),
-               ($1, 'failed1',  now(), null,  'RuntimeError: boom', 3),
-               ($1, 'pending1', now(), null,  null, 0)
+            (user_id, account_id, provider_message_id, received_at, extracted_at, extraction_error, extraction_attempts)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'ok1',      now(), now(), null, 0),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'skipped1', now(), now(), 'skipped: sender looks automated', 0),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'failed1',  now(), null,  'RuntimeError: boom', 3),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'pending1', now(), null,  null, 0)
         """,
         user_id,
     )
@@ -121,8 +121,8 @@ async def test_insights_never_leak_across_users(pool, test_auth_user, test_auth_
     await profiles.upsert(user_id, email)
     await profiles.upsert(other_id, other_email)
     await pool.execute(
-        "insert into public.emails (user_id, graph_message_id, from_address, received_at) "
-        "values ($1, 'a', 'mine@example.com', now()), ($2, 'b', 'theirs@example.com', now())",
+        "insert into public.emails (user_id, account_id, provider_message_id, from_address, received_at) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'a', 'mine@example.com', now()), ($2, (select id from public.connected_accounts where user_id = $2 and is_primary), 'b', 'theirs@example.com', now())",
         user_id,
         other_id,
     )

@@ -10,6 +10,7 @@ from app.repositories.action_items import ActionItemsRepository
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
+from tests.helpers import primary_account_id
 
 
 def _override_auth(user_id, email):
@@ -267,7 +268,9 @@ async def test_list_action_items_includes_scheduled_fields(pool, test_auth_user)
     )
     item_row = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
     calendar_event_id = await calendar_events.upsert(
-        user_id=user_id, graph_event_id="evt-1", subject="Call Gina", organizer=None,
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-1", subject="Call Gina", organizer=None,
         attendees=[], start_time=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
         end_time=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,

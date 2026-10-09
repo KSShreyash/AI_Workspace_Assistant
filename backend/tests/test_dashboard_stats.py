@@ -33,12 +33,12 @@ async def test_counts_this_week_and_the_change_from_last_week(pool, test_auth_us
     # 3 emails this week, 2 last week.
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, received_at)
-        values ($1, 'e1', now() - interval '1 day'),
-               ($1, 'e2', now() - interval '2 days'),
-               ($1, 'e3', now() - interval '3 days'),
-               ($1, 'e4', now() - interval '9 days'),
-               ($1, 'e5', now() - interval '10 days')
+        insert into public.emails (user_id, account_id, provider_message_id, received_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e1', now() - interval '1 day'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e2', now() - interval '2 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e3', now() - interval '3 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e4', now() - interval '9 days'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e5', now() - interval '10 days')
         """,
         user_id,
     )
@@ -105,8 +105,8 @@ async def test_daily_series_covers_every_day_including_empty_ones(pool, test_aut
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, received_at)
-        values ($1, 'd1', now() - interval '1 day')
+        insert into public.emails (user_id, account_id, provider_message_id, received_at)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'd1', now() - interval '1 day')
         """,
         user_id,
     )
@@ -159,8 +159,8 @@ async def test_stats_never_include_another_users_rows(pool, test_auth_user, test
     await profiles.upsert(user_id, email)
     await profiles.upsert(other_id, other_email)
     await pool.execute(
-        "insert into public.emails (user_id, graph_message_id, received_at) "
-        "values ($1, 'mine-1', now()), ($2, 'theirs-1', now())",
+        "insert into public.emails (user_id, account_id, provider_message_id, received_at) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'mine-1', now()), ($2, (select id from public.connected_accounts where user_id = $2 and is_primary), 'theirs-1', now())",
         user_id,
         other_id,
     )

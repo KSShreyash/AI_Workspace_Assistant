@@ -23,7 +23,10 @@ async def connect_account(
     access_token_expires_at: datetime,
     scopes: list[str] | None = None,
     provider: str = "microsoft",
-    provider_account_id: str = "test-account",
+    # Matches the account conftest already connects for every test user, so the
+    # default call updates that mailbox rather than adding a second one. Tests
+    # that actually want two pass an explicit id.
+    provider_account_id: str = "fixture-account",
     email_address: str = "test@example.com",
     is_primary: bool = False,
 ) -> uuid.UUID:
@@ -45,3 +48,11 @@ async def get_connected_account(
 ) -> asyncpg.Record | None:
     """The user's primary account - what a single-account test means by 'the' account."""
     return await ConnectedAccountsRepository(pool).get_primary(user_id)
+
+
+async def primary_account_id(pool: asyncpg.Pool, user_id: uuid.UUID) -> uuid.UUID:
+    """The mailbox the conftest fixture connects for every test user."""
+    return await pool.fetchval(
+        "select id from public.connected_accounts where user_id = $1 and is_primary",
+        user_id,
+    )

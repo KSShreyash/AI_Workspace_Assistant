@@ -56,8 +56,8 @@ async def test_extraction_does_not_call_the_model_while_quota_is_exhausted(
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'quota-1', 'colleague@example.com', 'Re: plan',
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'quota-1', 'colleague@example.com', 'Re: plan',
                 'Could you review the draft and send feedback before Thursday?')
         """,
         user_id,
@@ -81,8 +81,8 @@ async def test_a_message_held_back_by_quota_stays_pending(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
         """
-        insert into public.emails (user_id, graph_message_id, from_address, subject, body_text)
-        values ($1, 'quota-2', 'colleague@example.com', 'Re: plan',
+        insert into public.emails (user_id, account_id, provider_message_id, from_address, subject, body_text)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'quota-2', 'colleague@example.com', 'Re: plan',
                 'Could you review the draft and send feedback before Thursday?')
         """,
         user_id,
@@ -97,7 +97,7 @@ async def test_a_message_held_back_by_quota_stays_pending(pool, test_auth_user):
 
         row = await pool.fetchrow(
             "select extracted_at, extraction_attempts from public.emails "
-            "where graph_message_id = 'quota-2'"
+            "where provider_message_id = 'quota-2'"
         )
         assert row["extracted_at"] is None, "held-back message was marked done"
         assert row["extraction_attempts"] == 0, "held-back message burned a retry"

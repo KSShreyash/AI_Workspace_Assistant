@@ -26,10 +26,10 @@ async def test_lists_upcoming_events_soonest_first(pool, test_auth_user):
     await pool.execute(
         """
         insert into public.calendar_events
-            (user_id, graph_event_id, subject, start_time, end_time)
-        values ($1, 'e-late',  'Later',   now() + interval '3 days', now() + interval '3 days 1 hour'),
-               ($1, 'e-soon',  'Sooner',  now() + interval '1 hour', now() + interval '2 hours'),
-               ($1, 'e-past',  'Already', now() - interval '2 days', now() - interval '2 days 1 hour')
+            (user_id, account_id, provider_event_id, subject, start_time, end_time)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e-late',  'Later',   now() + interval '3 days', now() + interval '3 days 1 hour'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e-soon',  'Sooner',  now() + interval '1 hour', now() + interval '2 hours'),
+               ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e-past',  'Already', now() - interval '2 days', now() - interval '2 days 1 hour')
         """,
         user_id,
     )
@@ -49,9 +49,9 @@ async def test_includes_the_join_link_for_online_meetings(pool, test_auth_user):
     await pool.execute(
         """
         insert into public.calendar_events
-            (user_id, graph_event_id, subject, start_time, end_time,
+            (user_id, account_id, provider_event_id, subject, start_time, end_time,
              is_online_meeting, online_meeting_join_url)
-        values ($1, 'e1', 'Standup', now() + interval '1 hour', now() + interval '2 hours',
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e1', 'Standup', now() + interval '1 hour', now() + interval '2 hours',
                 true, 'https://teams.example/join')
         """,
         user_id,
@@ -70,8 +70,8 @@ async def test_skips_events_with_no_start_time(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await pool.execute(
-        "insert into public.calendar_events (user_id, graph_event_id, subject, start_time) "
-        "values ($1, 'e-null', 'Undated', null)",
+        "insert into public.calendar_events (user_id, account_id, provider_event_id, subject, start_time) "
+        "values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'e-null', 'Undated', null)",
         user_id,
     )
 
@@ -90,9 +90,9 @@ async def test_calendar_never_leaks_across_users(pool, test_auth_user, test_auth
     await profiles.upsert(other_id, other_email)
     await pool.execute(
         """
-        insert into public.calendar_events (user_id, graph_event_id, subject, start_time)
-        values ($1, 'mine', 'Mine', now() + interval '1 hour'),
-               ($2, 'theirs', 'Theirs', now() + interval '1 hour')
+        insert into public.calendar_events (user_id, account_id, provider_event_id, subject, start_time)
+        values ($1, (select id from public.connected_accounts where user_id = $1 and is_primary), 'mine', 'Mine', now() + interval '1 hour'),
+               ($2, (select id from public.connected_accounts where user_id = $2 and is_primary), 'theirs', 'Theirs', now() + interval '1 hour')
         """,
         user_id,
         other_id,

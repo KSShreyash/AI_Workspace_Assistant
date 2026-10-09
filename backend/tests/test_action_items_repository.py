@@ -7,6 +7,7 @@ from app.repositories.action_items import ActionItemsRepository
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
+from tests.helpers import primary_account_id
 
 
 @pytest.mark.asyncio
@@ -210,7 +211,9 @@ async def test_set_scheduled_calendar_event_id_returns_joined_row(pool, test_aut
     )
     item_row = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
     calendar_event_id = await calendar_events.upsert(
-        user_id=user_id, graph_event_id="evt-new", subject="Call Gina", organizer=None,
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-new", subject="Call Gina", organizer=None,
         attendees=[], start_time=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
         end_time=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,
@@ -237,7 +240,9 @@ async def test_set_scheduled_calendar_event_id_returns_none_for_foreign_item(poo
     )
     foreign_item = await pool.fetchrow("select id from public.action_items where user_id = $1", other_user_id)
     calendar_event_id = await calendar_events.upsert(
-        user_id=other_user_id, graph_event_id="evt-x", subject=None, organizer=None,
+        user_id=other_user_id,
+        account_id=await primary_account_id(pool, other_user_id),
+        provider_event_id="evt-x", subject=None, organizer=None,
         attendees=[], start_time=None, end_time=None,
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,
     )
@@ -261,7 +266,9 @@ async def test_deleting_scheduled_calendar_event_nulls_out_the_action_item_point
     )
     item_row = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
     calendar_event_id = await calendar_events.upsert(
-        user_id=user_id, graph_event_id="evt-removed", subject="Call Gina", organizer=None,
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-removed", subject="Call Gina", organizer=None,
         attendees=[], start_time=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
         end_time=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,
@@ -270,7 +277,9 @@ async def test_deleting_scheduled_calendar_event_nulls_out_the_action_item_point
 
     # Simulates the delta-sync "@removed" path: deleting the calendar event must not raise
     # a ForeignKeyViolationError now that the FK is ON DELETE SET NULL.
-    await calendar_events.delete(user_id, "evt-removed")
+    await calendar_events.delete(
+        account_id=await primary_account_id(pool, user_id), provider_event_id="evt-removed"
+    )
 
     refreshed = await action_items.get(user_id, item_row["id"])
     assert refreshed["scheduled_calendar_event_id"] is None
@@ -290,13 +299,17 @@ async def test_set_scheduled_calendar_event_id_does_not_overwrite_a_winning_conc
     )
     item_row = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
     first_event_id = await calendar_events.upsert(
-        user_id=user_id, graph_event_id="evt-first", subject="Call Gina", organizer=None,
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-first", subject="Call Gina", organizer=None,
         attendees=[], start_time=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
         end_time=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,
     )
     second_event_id = await calendar_events.upsert(
-        user_id=user_id, graph_event_id="evt-second", subject="Call Gina", organizer=None,
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-second", subject="Call Gina", organizer=None,
         attendees=[], start_time=datetime(2026, 7, 20, 15, 0, tzinfo=timezone.utc),
         end_time=datetime(2026, 7, 20, 15, 30, tzinfo=timezone.utc),
         is_online_meeting=False, online_meeting_join_url=None, body_text=None,

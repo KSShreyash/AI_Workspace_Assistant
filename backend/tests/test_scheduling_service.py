@@ -110,7 +110,7 @@ async def test_create_meeting_invites_attendee_when_email_known(pool, test_auth_
     assert sent_body["isOnlineMeeting"] is True
     assert sent_body["onlineMeetingProvider"] == "teamsForBusiness"
     row = await pool.fetchrow(
-        "select * from public.calendar_events where user_id = $1 and graph_event_id = $2", user_id, "graph-evt-1"
+        "select * from public.calendar_events where user_id = $1 and provider_event_id = $2", user_id, "graph-evt-1"
     )
     assert row["online_meeting_join_url"] == "https://teams.microsoft.com/l/x"
 

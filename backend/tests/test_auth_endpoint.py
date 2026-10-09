@@ -33,7 +33,7 @@ async def _post(body: dict):
 
 
 @pytest.mark.asyncio
-async def test_connecting_a_mailbox_stores_its_tokens_encrypted(pool, as_user):
+async def test_connecting_a_mailbox_stores_its_tokens_encrypted(pool, no_accounts, as_user):
     user_id, _ = as_user
 
     with patch("app.api.v1.auth.sync_account", new=AsyncMock()):
@@ -58,7 +58,7 @@ async def test_connecting_a_mailbox_kicks_off_a_sync_in_the_background(pool, as_
 
 
 @pytest.mark.asyncio
-async def test_a_second_mailbox_is_added_rather_than_replacing_the_first(pool, as_user):
+async def test_a_second_mailbox_is_added_rather_than_replacing_the_first(pool, no_accounts, as_user):
     user_id, _ = as_user
 
     with patch("app.api.v1.auth.sync_account", new=AsyncMock()):
@@ -75,7 +75,7 @@ async def test_a_second_mailbox_is_added_rather_than_replacing_the_first(pool, a
 
 
 @pytest.mark.asyncio
-async def test_reconnecting_an_expired_mailbox_clears_needs_reauth(pool, as_user):
+async def test_reconnecting_an_expired_mailbox_clears_needs_reauth(pool, no_accounts, as_user):
     """Reconnecting is how a user fixes an expired mailbox - it has to work."""
     user_id, _ = as_user
     repo = ConnectedAccountsRepository(pool)

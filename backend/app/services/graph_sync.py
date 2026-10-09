@@ -37,11 +37,13 @@ def _parse_graph_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
-async def sync_mail(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -> None:
+async def sync_mail(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID, access_token: str
+) -> None:
     sync_state = SyncStateRepository(pool)
     emails = EmailsRepository(pool)
 
-    state = await sync_state.get(user_id, "mail")
+    state = await sync_state.get(account_id, "mail")
     if state is not None and state["status"] == "not_available":
         return
 
@@ -57,12 +59,13 @@ async def sync_mail(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
             page = await graph_client.fetch_delta_page(access_token, url)
             for item in page["items"]:
                 if "@removed" in item:
-                    await emails.delete(user_id, item["id"])
+                    await emails.delete(account_id=account_id, provider_message_id=item["id"])
                     continue
                 sender = (item.get("sender") or {}).get("emailAddress") or {}
                 await emails.upsert(
                     user_id=user_id,
-                    graph_message_id=item["id"],
+                    account_id=account_id,
+                    provider_message_id=item["id"],
                     subject=item.get("subject"),
                     from_address=sender.get("address"),
                     from_name=sender.get("name"),
@@ -76,19 +79,21 @@ async def sync_mail(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
                 delta_link = page["delta_link"]
                 break
             url = page["next_link"]
-        await sync_state.upsert(user_id, "mail", delta_link, "ok")
+        await sync_state.upsert(account_id, "mail", delta_link, "ok")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (400, 403):
-            await sync_state.upsert(user_id, "mail", None, "not_available")
+            await sync_state.upsert(account_id, "mail", None, "not_available")
         else:
             raise
 
 
-async def sync_calendar(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -> None:
+async def sync_calendar(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID, access_token: str
+) -> None:
     sync_state = SyncStateRepository(pool)
     events = CalendarEventsRepository(pool)
 
-    state = await sync_state.get(user_id, "calendar")
+    state = await sync_state.get(account_id, "calendar")
     if state is not None and state["status"] == "not_available":
         return
 
@@ -107,12 +112,13 @@ async def sync_calendar(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: st
             page = await graph_client.fetch_delta_page(access_token, url)
             for item in page["items"]:
                 if "@removed" in item:
-                    await events.delete(user_id, item["id"])
+                    await events.delete(account_id=account_id, provider_event_id=item["id"])
                     continue
                 online_meeting = item.get("onlineMeeting") or {}
                 await events.upsert(
                     user_id=user_id,
-                    graph_event_id=item["id"],
+                    account_id=account_id,
+                    provider_event_id=item["id"],
                     subject=item.get("subject"),
                     organizer=((item.get("organizer") or {}).get("emailAddress") or {}).get("address"),
                     attendees=[
@@ -128,19 +134,21 @@ async def sync_calendar(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: st
                 delta_link = page["delta_link"]
                 break
             url = page["next_link"]
-        await sync_state.upsert(user_id, "calendar", delta_link, "ok")
+        await sync_state.upsert(account_id, "calendar", delta_link, "ok")
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (400, 403):
-            await sync_state.upsert(user_id, "calendar", None, "not_available")
+            await sync_state.upsert(account_id, "calendar", None, "not_available")
         else:
             raise
 
 
-async def sync_chat(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -> None:
+async def sync_chat(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID, access_token: str
+) -> None:
     sync_state = SyncStateRepository(pool)
     messages = ChatMessagesRepository(pool)
 
-    state = await sync_state.get(user_id, "chat")
+    state = await sync_state.get(account_id, "chat")
     if state is not None and state["status"] == "not_available":
         return
 
@@ -154,7 +162,7 @@ async def sync_chat(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
         chats = await graph_client.list_chats(access_token)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (400, 403):
-            await sync_state.upsert(user_id, "chat", None, "not_available")
+            await sync_state.upsert(account_id, "chat", None, "not_available")
             return
         raise
 
@@ -168,8 +176,9 @@ async def sync_chat(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
                     from_user = (item.get("from") or {}).get("user") or {}
                     await messages.upsert(
                         user_id=user_id,
-                        graph_chat_id=chat_id,
-                        graph_message_id=item["id"],
+                        account_id=account_id,
+                        provider_chat_id=chat_id,
+                        provider_message_id=item["id"],
                         from_user=from_user.get("displayName"),
                         content=(item.get("body") or {}).get("content"),
                         sent_at=_parse_graph_datetime(item.get("createdDateTime")),
@@ -183,7 +192,7 @@ async def sync_chat(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
                 continue
             raise
 
-    await sync_state.upsert(user_id, "chat", None, "ok")
+    await sync_state.upsert(account_id, "chat", None, "ok")
 
 
 async def sync_account(
@@ -212,14 +221,14 @@ async def sync_account(
     errors: list[Exception] = []
     for sync_fn in sync_fns:
         try:
-            await sync_fn(pool, user_id, access_token)
+            await sync_fn(pool, user_id, account_id, access_token)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
                 access_token = await refresh_and_persist(pool, account)
                 if access_token is None:
                     return
                 try:
-                    await sync_fn(pool, user_id, access_token)
+                    await sync_fn(pool, user_id, account_id, access_token)
                 except Exception as retry_exc:
                     errors.append(retry_exc)
             else:

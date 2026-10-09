@@ -68,7 +68,12 @@ class ConnectedAccountsRepository:
                         encrypted_refresh_token = excluded.encrypted_refresh_token,
                         access_token_expires_at = excluded.access_token_expires_at,
                         scopes = excluded.scopes,
-                        is_primary = excluded.is_primary,
+                        -- is_primary=False means "not asking", not "demote".
+                        -- Refreshing a mailbox's tokens must not quietly strip
+                        -- it of primary status and leave the user with no
+                        -- calendar. Demotion happens only when another account
+                        -- is explicitly promoted, which the branch above does.
+                        is_primary = excluded.is_primary or public.connected_accounts.is_primary,
                         -- Reconnecting is how a user fixes an expired mailbox,
                         -- so it has to clear needs_reauth.
                         connection_status = 'connected',

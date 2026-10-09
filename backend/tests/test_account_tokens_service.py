@@ -24,6 +24,12 @@ from app.services.graph_client import GraphRefreshError
 
 async def _connect(pool, user_id, email, *, provider="microsoft", pid="ms-1", expires_in_hours=1):
     repo = ConnectedAccountsRepository(pool)
+    # conftest connects a mailbox for every test user. These tests assert on
+    # which account is selected, so they start from an empty set.
+    await pool.execute(
+        "delete from public.connected_accounts where user_id = $1 and provider_account_id = 'fixture-account'",
+        user_id,
+    )
     account_id = await repo.upsert(
         user_id=user_id,
         provider=provider,
@@ -137,7 +143,7 @@ async def test_get_primary_account_returns_the_calendar_account(pool, test_auth_
 
 
 @pytest.mark.asyncio
-async def test_get_primary_account_is_none_when_nothing_is_connected(pool, test_auth_user):
+async def test_get_primary_account_is_none_when_nothing_is_connected(pool, no_accounts, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
 

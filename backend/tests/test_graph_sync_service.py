@@ -10,7 +10,7 @@ from app.core.security import decrypt_token, encrypt_token
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.chat_messages import ChatMessagesRepository
 from app.repositories.emails import EmailsRepository
-from tests.helpers import connect_account, get_connected_account
+from tests.helpers import connect_account, get_connected_account, primary_account_id
 from app.repositories.profiles import ProfilesRepository
 from app.repositories.sync_state import SyncStateRepository
 from app.services.graph_client import GraphRefreshError
@@ -53,10 +53,10 @@ async def test_sync_mail_upserts_and_stores_delta_link(pool, test_auth_user):
         "delta_link": "https://graph.microsoft.com/v1.0/delta?$deltatoken=abc",
     }
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page):
-        await sync_mail(pool, user_id, "access-token")
+        await sync_mail(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await EmailsRepository(pool).count(user_id) == 1
-    state = await SyncStateRepository(pool).get(user_id, "mail")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "mail")
     assert state["delta_link"] == "https://graph.microsoft.com/v1.0/delta?$deltatoken=abc"
     assert state["status"] == "ok"
 
@@ -65,11 +65,11 @@ async def test_sync_mail_upserts_and_stores_delta_link(pool, test_auth_user):
 async def test_sync_mail_resumes_from_stored_delta_link(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await SyncStateRepository(pool).upsert(user_id, "mail", "https://graph.microsoft.com/v1.0/delta?$deltatoken=prev", "ok")
+    await SyncStateRepository(pool).upsert(await primary_account_id(pool, user_id), "mail", "https://graph.microsoft.com/v1.0/delta?$deltatoken=prev", "ok")
 
     page = {"items": [], "next_link": None, "delta_link": "https://graph.microsoft.com/v1.0/delta?$deltatoken=next"}
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page) as mock_fetch:
-        await sync_mail(pool, user_id, "access-token")
+        await sync_mail(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_fetch.assert_called_once_with("access-token", "https://graph.microsoft.com/v1.0/delta?$deltatoken=prev")
 
@@ -80,7 +80,8 @@ async def test_sync_mail_handles_removed_items(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await EmailsRepository(pool).upsert(
         user_id=user_id,
-        graph_message_id="msg-to-remove",
+        account_id=await primary_account_id(pool, user_id),
+        provider_message_id="msg-to-remove",
         subject="Old",
         from_address="a@example.com",
         from_name="A",
@@ -95,7 +96,7 @@ async def test_sync_mail_handles_removed_items(pool, test_auth_user):
         "delta_link": "https://graph.microsoft.com/v1.0/delta?$deltatoken=abc",
     }
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page):
-        await sync_mail(pool, user_id, "access-token")
+        await sync_mail(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await EmailsRepository(pool).count(user_id) == 0
 
@@ -108,9 +109,9 @@ async def test_sync_mail_sets_not_available_on_403(pool, test_auth_user):
     error = httpx.HTTPStatusError("forbidden", request=request, response=httpx.Response(403, request=request))
 
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", side_effect=error):
-        await sync_mail(pool, user_id, "access-token")
+        await sync_mail(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
-    state = await SyncStateRepository(pool).get(user_id, "mail")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "mail")
     assert state["status"] == "not_available"
 
 
@@ -118,10 +119,10 @@ async def test_sync_mail_sets_not_available_on_403(pool, test_auth_user):
 async def test_sync_mail_skips_when_already_not_available(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await SyncStateRepository(pool).upsert(user_id, "mail", None, "not_available")
+    await SyncStateRepository(pool).upsert(await primary_account_id(pool, user_id), "mail", None, "not_available")
 
     with patch("app.services.graph_sync.graph_client.fetch_delta_page") as mock_fetch:
-        await sync_mail(pool, user_id, "access-token")
+        await sync_mail(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_fetch.assert_not_called()
 
@@ -148,15 +149,15 @@ async def test_sync_calendar_upserts_with_online_meeting_info(pool, test_auth_us
         "delta_link": "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=abc",
     }
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page):
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await CalendarEventsRepository(pool).count(user_id) == 1
-    state = await SyncStateRepository(pool).get(user_id, "calendar")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "calendar")
     assert state["status"] == "ok"
 
     row = await pool.fetchrow(
         "select organizer, attendees, is_online_meeting, online_meeting_join_url "
-        "from public.calendar_events where user_id = $1 and graph_event_id = $2",
+        "from public.calendar_events where user_id = $1 and provider_event_id = $2",
         user_id,
         "evt-1",
     )
@@ -175,7 +176,7 @@ async def test_sync_calendar_first_sync_uses_backfill_and_lookahead_window(pool,
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page), \
          patch("app.services.graph_sync.graph_client.calendar_delta_url") as mock_url:
         mock_url.return_value = "https://graph.microsoft.com/v1.0/me/calendarView/delta?start=x&end=y"
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert mock_url.call_count == 1
     start_arg, end_arg = mock_url.call_args[0]
@@ -190,9 +191,9 @@ async def test_sync_calendar_sets_not_available_on_403(pool, test_auth_user):
     error = httpx.HTTPStatusError("forbidden", request=request, response=httpx.Response(403, request=request))
 
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", side_effect=error):
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
-    state = await SyncStateRepository(pool).get(user_id, "calendar")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "calendar")
     assert state["status"] == "not_available"
 
 
@@ -201,7 +202,10 @@ async def test_sync_calendar_resumes_from_stored_delta_link(pool, test_auth_user
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
     await SyncStateRepository(pool).upsert(
-        user_id, "calendar", "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=prev", "ok"
+        await primary_account_id(pool, user_id),
+        "calendar",
+        "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=prev",
+        "ok",
     )
 
     page = {
@@ -210,7 +214,7 @@ async def test_sync_calendar_resumes_from_stored_delta_link(pool, test_auth_user
         "delta_link": "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=next",
     }
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page) as mock_fetch:
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_fetch.assert_called_once_with(
         "access-token", "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=prev"
@@ -223,7 +227,8 @@ async def test_sync_calendar_handles_removed_items(pool, test_auth_user):
     await ProfilesRepository(pool).upsert(user_id, email)
     await CalendarEventsRepository(pool).upsert(
         user_id=user_id,
-        graph_event_id="evt-to-remove",
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-to-remove",
         subject="Old",
         organizer=None,
         attendees=[],
@@ -240,7 +245,7 @@ async def test_sync_calendar_handles_removed_items(pool, test_auth_user):
         "delta_link": "https://graph.microsoft.com/v1.0/calendarView/delta?$deltatoken=abc",
     }
     with patch("app.services.graph_sync.graph_client.fetch_delta_page", return_value=page):
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await CalendarEventsRepository(pool).count(user_id) == 0
 
@@ -249,10 +254,10 @@ async def test_sync_calendar_handles_removed_items(pool, test_auth_user):
 async def test_sync_calendar_skips_when_already_not_available(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await SyncStateRepository(pool).upsert(user_id, "calendar", None, "not_available")
+    await SyncStateRepository(pool).upsert(await primary_account_id(pool, user_id), "calendar", None, "not_available")
 
     with patch("app.services.graph_sync.graph_client.fetch_delta_page") as mock_fetch:
-        await sync_calendar(pool, user_id, "access-token")
+        await sync_calendar(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_fetch.assert_not_called()
 
@@ -275,10 +280,10 @@ async def test_sync_chat_upserts_messages_across_chats(pool, test_auth_user):
     }
     with patch("app.services.graph_sync.graph_client.list_chats", return_value=chats), \
          patch("app.services.graph_sync.graph_client.fetch_chat_messages_page", return_value=page):
-        await sync_chat(pool, user_id, "access-token")
+        await sync_chat(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await ChatMessagesRepository(pool).count(user_id) == 2  # one message per chat
-    state = await SyncStateRepository(pool).get(user_id, "chat")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "chat")
     assert state["status"] == "ok"
     assert state["delta_link"] is None
 
@@ -292,10 +297,10 @@ async def test_sync_chat_sets_not_available_when_list_chats_forbidden(pool, test
 
     with patch("app.services.graph_sync.graph_client.list_chats", side_effect=error), \
          patch("app.services.graph_sync.graph_client.fetch_chat_messages_page") as mock_messages:
-        await sync_chat(pool, user_id, "access-token")
+        await sync_chat(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_messages.assert_not_called()
-    state = await SyncStateRepository(pool).get(user_id, "chat")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "chat")
     assert state["status"] == "not_available"
 
 
@@ -309,13 +314,13 @@ async def test_sync_chat_skips_restricted_chat_but_still_reports_ok(pool, test_a
 
     with patch("app.services.graph_sync.graph_client.list_chats", return_value=chats), \
          patch("app.services.graph_sync.graph_client.fetch_chat_messages_page", side_effect=error):
-        await sync_chat(pool, user_id, "access-token")
+        await sync_chat(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     # A single chat being inaccessible is a per-chat restriction, not a
     # feature-unsupported signal (that's list_chats' job) - the resource as
     # a whole should still report "ok", just with that one chat skipped.
     assert await ChatMessagesRepository(pool).count(user_id) == 0
-    state = await SyncStateRepository(pool).get(user_id, "chat")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "chat")
     assert state["status"] == "ok"
 
 
@@ -347,10 +352,10 @@ async def test_sync_chat_skips_restricted_chat_but_syncs_others(pool, test_auth_
 
     with patch("app.services.graph_sync.graph_client.list_chats", return_value=chats), \
          patch("app.services.graph_sync.graph_client.fetch_chat_messages_page", side_effect=fake_fetch):
-        await sync_chat(pool, user_id, "access-token")
+        await sync_chat(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     assert await ChatMessagesRepository(pool).count(user_id) == 1
-    state = await SyncStateRepository(pool).get(user_id, "chat")
+    state = await SyncStateRepository(pool).get(await primary_account_id(pool, user_id), "chat")
     assert state["status"] == "ok"
 
 
@@ -358,10 +363,10 @@ async def test_sync_chat_skips_restricted_chat_but_syncs_others(pool, test_auth_
 async def test_sync_chat_skips_when_already_not_available(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await SyncStateRepository(pool).upsert(user_id, "chat", None, "not_available")
+    await SyncStateRepository(pool).upsert(await primary_account_id(pool, user_id), "chat", None, "not_available")
 
     with patch("app.services.graph_sync.graph_client.list_chats") as mock_list:
-        await sync_chat(pool, user_id, "access-token")
+        await sync_chat(pool, user_id, await primary_account_id(pool, user_id), "access-token")
 
     mock_list.assert_not_called()
 
@@ -386,9 +391,9 @@ async def test_sync_user_runs_all_three_resources(pool, test_auth_user):
         mock_chat.return_value = None
         await sync_user(pool, user_id)
 
-    mock_mail.assert_called_once_with(pool, user_id, "valid-access")
-    mock_calendar.assert_called_once_with(pool, user_id, "valid-access")
-    mock_chat.assert_called_once_with(pool, user_id, "valid-access")
+    mock_mail.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "valid-access")
+    mock_calendar.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "valid-access")
+    mock_chat.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "valid-access")
 
 
 @pytest.mark.asyncio
@@ -414,7 +419,7 @@ async def test_sync_user_refreshes_expired_token_first(pool, test_auth_user):
          patch("app.services.graph_sync.sync_chat"):
         await sync_user(pool, user_id)
 
-    mock_mail.assert_called_once_with(pool, user_id, "new-access")
+    mock_mail.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "new-access")
     row = await get_connected_account(pool, user_id)
     assert decrypt_token(row["encrypted_access_token"]) == "new-access"
 
@@ -441,7 +446,7 @@ async def test_sync_user_sets_needs_reauth_on_refresh_failure(pool, test_auth_us
 
 
 @pytest.mark.asyncio
-async def test_sync_user_noop_when_not_connected(pool, test_auth_user):
+async def test_sync_user_noop_when_not_connected(pool, test_auth_user, no_accounts):
     user_id, _ = test_auth_user
 
     with patch("app.services.graph_sync.sync_mail") as mock_mail:
@@ -471,7 +476,7 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
 
     call_count = {"n": 0}
 
-    async def fake_sync_mail(pool_arg, uid, token):
+    async def fake_sync_mail(pool_arg, uid, account_id, token):
         call_count["n"] += 1
         if call_count["n"] == 1:
             raise unauthorized
@@ -484,8 +489,8 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
         await sync_user(pool, user_id)
 
     assert call_count["n"] == 2
-    mock_calendar.assert_called_once_with(pool, user_id, "recovered-access")
-    mock_chat.assert_called_once_with(pool, user_id, "recovered-access")
+    mock_calendar.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "recovered-access")
+    mock_chat.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "recovered-access")
     row = await get_connected_account(pool, user_id)
     assert decrypt_token(row["encrypted_access_token"]) == "recovered-access"
 
@@ -534,8 +539,8 @@ async def test_sync_user_isolates_resource_failures(pool, test_auth_user):
         with pytest.raises(RuntimeError, match="mail boom"):
             await sync_user(pool, user_id)
 
-    mock_calendar.assert_called_once_with(pool, user_id, "valid-access")
-    mock_chat.assert_called_once_with(pool, user_id, "valid-access")
+    mock_calendar.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "valid-access")
+    mock_chat.assert_called_once_with(pool, user_id, await primary_account_id(pool, user_id), "valid-access")
 
 
 @pytest.mark.asyncio
@@ -626,7 +631,7 @@ async def test_sync_user_logs_when_extraction_fails(pool, test_auth_user, caplog
         scopes=[],
     )
 
-    async def no_op_sync(pool_arg, uid, token):
+    async def no_op_sync(pool_arg, uid, account_id, token):
         return None
 
     with caplog.at_level(logging.ERROR), \
