@@ -10,7 +10,7 @@ from app.core.security import decrypt_token, encrypt_token
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.chat_messages import ChatMessagesRepository
 from app.repositories.emails import EmailsRepository
-from app.repositories.graph_tokens import GraphTokensRepository
+from tests.helpers import connect_account, get_connected_account
 from app.repositories.profiles import ProfilesRepository
 from app.repositories.sync_state import SyncStateRepository
 from app.services.graph_client import GraphRefreshError
@@ -370,7 +370,7 @@ async def test_sync_chat_skips_when_already_not_available(pool, test_auth_user):
 async def test_sync_user_runs_all_three_resources(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -395,7 +395,7 @@ async def test_sync_user_runs_all_three_resources(pool, test_auth_user):
 async def test_sync_user_refreshes_expired_token_first(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("expired-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -408,14 +408,14 @@ async def test_sync_user_refreshes_expired_token_first(pool, test_auth_user):
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
     }
 
-    with patch("app.services.graph_tokens_service.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
          patch("app.services.graph_sync.sync_mail") as mock_mail, \
          patch("app.services.graph_sync.sync_calendar"), \
          patch("app.services.graph_sync.sync_chat"):
         await sync_user(pool, user_id)
 
     mock_mail.assert_called_once_with(pool, user_id, "new-access")
-    row = await GraphTokensRepository(pool).get(user_id)
+    row = await get_connected_account(pool, user_id)
     assert decrypt_token(row["encrypted_access_token"]) == "new-access"
 
 
@@ -423,7 +423,7 @@ async def test_sync_user_refreshes_expired_token_first(pool, test_auth_user):
 async def test_sync_user_sets_needs_reauth_on_refresh_failure(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("expired-access"),
         encrypted_refresh_token=encrypt_token("dead-refresh"),
@@ -431,13 +431,13 @@ async def test_sync_user_sets_needs_reauth_on_refresh_failure(pool, test_auth_us
         scopes=["Mail.Read"],
     )
 
-    with patch("app.services.graph_tokens_service.refresh_access_token", side_effect=GraphRefreshError("expired")), \
+    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")), \
          patch("app.services.graph_sync.sync_mail") as mock_mail:
         await sync_user(pool, user_id)
 
     mock_mail.assert_not_called()
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "needs_reauth"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "needs_reauth"
 
 
 @pytest.mark.asyncio
@@ -454,7 +454,7 @@ async def test_sync_user_noop_when_not_connected(pool, test_auth_user):
 async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("stale-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -477,7 +477,7 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
             raise unauthorized
         assert token == "recovered-access"
 
-    with patch("app.services.graph_tokens_service.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
          patch("app.services.graph_sync.sync_mail", side_effect=fake_sync_mail), \
          patch("app.services.graph_sync.sync_calendar") as mock_calendar, \
          patch("app.services.graph_sync.sync_chat") as mock_chat:
@@ -486,7 +486,7 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
     assert call_count["n"] == 2
     mock_calendar.assert_called_once_with(pool, user_id, "recovered-access")
     mock_chat.assert_called_once_with(pool, user_id, "recovered-access")
-    row = await GraphTokensRepository(pool).get(user_id)
+    row = await get_connected_account(pool, user_id)
     assert decrypt_token(row["encrypted_access_token"]) == "recovered-access"
 
 
@@ -494,7 +494,7 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
 async def test_sync_user_sets_needs_reauth_when_401_mid_sync_refresh_fails(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("stale-access"),
         encrypted_refresh_token=encrypt_token("dead-refresh"),
@@ -504,7 +504,7 @@ async def test_sync_user_sets_needs_reauth_when_401_mid_sync_refresh_fails(pool,
     request = httpx.Request("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta")
     unauthorized = httpx.HTTPStatusError("unauthorized", request=request, response=httpx.Response(401, request=request))
 
-    with patch("app.services.graph_tokens_service.refresh_access_token", side_effect=GraphRefreshError("expired")), \
+    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")), \
          patch("app.services.graph_sync.sync_mail", side_effect=unauthorized), \
          patch("app.services.graph_sync.sync_calendar") as mock_calendar, \
          patch("app.services.graph_sync.sync_chat") as mock_chat:
@@ -512,15 +512,15 @@ async def test_sync_user_sets_needs_reauth_when_401_mid_sync_refresh_fails(pool,
 
     mock_calendar.assert_not_called()
     mock_chat.assert_not_called()
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "needs_reauth"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "needs_reauth"
 
 
 @pytest.mark.asyncio
 async def test_sync_user_isolates_resource_failures(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -542,7 +542,7 @@ async def test_sync_user_isolates_resource_failures(pool, test_auth_user):
 async def test_sync_user_runs_extraction_after_sync(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -566,7 +566,7 @@ async def test_sync_user_runs_extraction_after_sync(pool, test_auth_user):
 async def test_sync_user_extraction_failure_does_not_propagate(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -585,7 +585,7 @@ async def test_sync_user_extraction_failure_does_not_propagate(pool, test_auth_u
 async def test_sync_user_still_attempts_extraction_when_a_resource_sync_fails(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -614,13 +614,22 @@ async def test_sync_user_logs_when_extraction_fails(pool, test_auth_user, caplog
     """
     import logging
 
-    user_id, _ = test_auth_user
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    # sync_user iterates connected accounts now, so there has to be one.
+    await connect_account(
+        pool,
+        user_id=user_id,
+        encrypted_access_token=encrypt_token("a"),
+        encrypted_refresh_token=encrypt_token("r"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=[],
+    )
 
     async def no_op_sync(pool_arg, uid, token):
         return None
 
     with caplog.at_level(logging.ERROR), \
-         patch("app.services.graph_sync.get_valid_access_token", return_value="tok"), \
          patch("app.services.graph_sync.sync_mail", side_effect=no_op_sync), \
          patch("app.services.graph_sync.sync_calendar", side_effect=no_op_sync), \
          patch("app.services.graph_sync.sync_chat", side_effect=no_op_sync), \

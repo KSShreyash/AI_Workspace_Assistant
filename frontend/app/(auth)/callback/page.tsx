@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 
 import { apiBaseUrl } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
-import { GRAPH_RESOURCE_SCOPES } from '@/lib/graph-scopes'
+import { GOOGLE_RESOURCE_SCOPES, GRAPH_RESOURCE_SCOPES } from '@/lib/graph-scopes'
 
 const GRAPH_TOKENS_TIMEOUT_MS = 30000
 
@@ -29,6 +29,27 @@ export default function CallbackPage() {
           provider_refresh_token?: string
         }
 
+        // Which provider this session authorised, and that provider's own id
+        // for the account. The backend keys mailboxes on
+        // (user, provider, provider_account_id), so without these a reconnect
+        // cannot be told apart from connecting a brand new mailbox.
+        const identities = session.user?.identities ?? []
+        const identity =
+          identities.find((i) => i.provider === 'azure' || i.provider === 'google') ??
+          identities[0]
+
+        if (!identity) {
+          setError('Could not identify the account you signed in with. Please try again.')
+          return
+        }
+
+        // Supabase names the Microsoft provider "azure"; our API calls it
+        // "microsoft", which is what the rest of the product says.
+        const provider = identity.provider === 'azure' ? 'microsoft' : identity.provider
+        const identityData = (identity.identity_data ?? {}) as Record<string, unknown>
+        const emailAddress =
+          (identityData.email as string | undefined) ?? session.user?.email ?? ''
+
         if (!session.provider_token || !session.provider_refresh_token) {
           setError('Microsoft did not return Graph tokens. Please try again.')
           return
@@ -40,7 +61,7 @@ export default function CallbackPage() {
         let response: Response
         try {
           response = await fetch(
-            `${apiBaseUrl()}/api/auth/graph-tokens`,
+            `${apiBaseUrl()}/api/auth/accounts`,
             {
               method: 'POST',
               headers: {
@@ -48,10 +69,14 @@ export default function CallbackPage() {
                 Authorization: `Bearer ${session.access_token}`,
               },
               body: JSON.stringify({
+                provider,
+                provider_account_id: identity.id,
+                email_address: emailAddress,
                 provider_token: session.provider_token,
                 provider_refresh_token: session.provider_refresh_token,
                 expires_in: 3600,
-                scopes: GRAPH_RESOURCE_SCOPES,
+                scopes:
+                  provider === 'google' ? GOOGLE_RESOURCE_SCOPES : GRAPH_RESOURCE_SCOPES,
               }),
               signal: controller.signal,
             }

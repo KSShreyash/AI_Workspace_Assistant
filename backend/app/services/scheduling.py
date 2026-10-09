@@ -8,7 +8,11 @@ import httpx
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.services import graph_client
-from app.services.graph_tokens_service import get_valid_access_token, refresh_and_persist
+from app.services.account_tokens import (
+    get_primary_account,
+    get_valid_access_token,
+    refresh_and_persist,
+)
 
 SLOT_MINUTES = 30
 LOOKAHEAD_DAYS = 14
@@ -70,7 +74,12 @@ async def create_meeting(
     contact_email: str | None,
     contact_display_name: str | None,
 ) -> asyncpg.Record | None:
-    access_token = await get_valid_access_token(pool, user_id)
+    # Meetings go on the primary account's calendar - the one the user
+    # designated as their main one.
+    account = await get_primary_account(pool, user_id)
+    if account is None:
+        return None
+    access_token = await get_valid_access_token(pool, account)
     if access_token is None:
         return None
 
@@ -92,7 +101,7 @@ async def create_meeting(
         graph_event = await graph_client.create_calendar_event(access_token, payload)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 401:
-            access_token = await refresh_and_persist(pool, user_id)
+            access_token = await refresh_and_persist(pool, account)
             if access_token is None:
                 return None
             graph_event = await graph_client.create_calendar_event(access_token, payload)

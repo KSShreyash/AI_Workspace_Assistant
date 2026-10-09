@@ -8,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from app.core.deps import CurrentUser, get_current_user
 from app.core.security import encrypt_token
 from app.main import app
-from app.repositories.graph_tokens import GraphTokensRepository
+from tests.helpers import connect_account, get_connected_account
 from app.repositories.profiles import ProfilesRepository
 
 
@@ -16,7 +16,7 @@ from app.repositories.profiles import ProfilesRepository
 async def test_graph_status_returns_me_when_token_valid(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -32,8 +32,8 @@ async def test_graph_status_returns_me_when_token_valid(pool, test_auth_user):
 
     assert response.status_code == 200
     assert response.json() == {"connected": True, "graph_me": {"mail": email}}
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "connected"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "connected"
     app.dependency_overrides.clear()
 
 
@@ -41,7 +41,7 @@ async def test_graph_status_returns_me_when_token_valid(pool, test_auth_user):
 async def test_graph_status_refreshes_expired_token(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("expired-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -55,18 +55,18 @@ async def test_graph_status_refreshes_expired_token(pool, test_auth_user):
         "refresh_token": "new-refresh",
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
     }
-    with patch("app.api.v1.me.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
          patch("app.api.v1.me.get_me", new=AsyncMock(return_value={"mail": email})):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/me/graph-status")
 
     assert response.status_code == 200
-    row = await GraphTokensRepository(pool).get(user_id)
+    row = await get_connected_account(pool, user_id)
     from app.core.security import decrypt_token
     assert decrypt_token(row["encrypted_access_token"]) == "new-access"
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "connected"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "connected"
     app.dependency_overrides.clear()
 
 
@@ -76,7 +76,7 @@ async def test_graph_status_sets_needs_reauth_on_refresh_failure(pool, test_auth
 
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("expired-access"),
         encrypted_refresh_token=encrypt_token("dead-refresh"),
@@ -85,14 +85,14 @@ async def test_graph_status_sets_needs_reauth_on_refresh_failure(pool, test_auth
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
 
-    with patch("app.api.v1.me.refresh_access_token", side_effect=GraphRefreshError("expired")):
+    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/me/graph-status")
 
     assert response.status_code == 409
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "needs_reauth"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "needs_reauth"
     app.dependency_overrides.clear()
 
 
@@ -106,7 +106,7 @@ def _graph_error(status_code: int) -> httpx.HTTPStatusError:
 async def test_graph_status_sets_needs_reauth_when_graph_rejects_token(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -121,8 +121,8 @@ async def test_graph_status_sets_needs_reauth_when_graph_rejects_token(pool, tes
             response = await client.get("/api/me/graph-status")
 
     assert response.status_code == 409
-    profile = await ProfilesRepository(pool).get(user_id)
-    assert profile["graph_connection_status"] == "needs_reauth"
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "needs_reauth"
     app.dependency_overrides.clear()
 
 
@@ -130,7 +130,7 @@ async def test_graph_status_sets_needs_reauth_when_graph_rejects_token(pool, tes
 async def test_graph_status_returns_502_on_other_graph_failure(pool, test_auth_user):
     user_id, email = test_auth_user
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),

@@ -12,7 +12,7 @@ from app.core.security import encrypt_token
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.contacts import ContactsRepository
-from app.repositories.graph_tokens import GraphTokensRepository
+from tests.helpers import connect_account, get_connected_account
 from app.repositories.profiles import ProfilesRepository
 from app.services.scheduling import MAX_SUGGESTIONS, create_meeting, suggest_slots
 
@@ -67,7 +67,7 @@ def test_suggest_slots_defaults_to_utc_when_timezone_name_is_none():
 
 async def _seed_item_and_token(pool, user_id, email, contact_email=None):
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),
@@ -176,7 +176,7 @@ async def test_create_meeting_retries_once_on_401(pool, test_auth_user):
     start = datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc)
     end = datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc)
 
-    with patch("app.services.graph_tokens_service.refresh_access_token", return_value=refreshed):
+    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed):
         result = await create_meeting(
             pool, user_id, item_id, item_text="Call Gina", start=start, end=end,
             online_meeting=False, contact_email="gina@example.com", contact_display_name="Gina",

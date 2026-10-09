@@ -10,7 +10,7 @@ from app.core.security import encrypt_token
 from app.main import app
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
-from app.repositories.graph_tokens import GraphTokensRepository
+from tests.helpers import connect_account, get_connected_account
 from app.repositories.profiles import ProfilesRepository
 
 GRAPH_EVENTS_URL = "https://graph.microsoft.com/v1.0/me/events"
@@ -22,7 +22,7 @@ def _override_auth(user_id, email):
 
 async def _seed_connected_user_with_item(pool, user_id, email, with_contact=True):
     await ProfilesRepository(pool).upsert(user_id, email)
-    await GraphTokensRepository(pool).upsert(
+    await connect_account(pool, 
         user_id=user_id,
         encrypted_access_token=encrypt_token("valid-access"),
         encrypted_refresh_token=encrypt_token("valid-refresh"),

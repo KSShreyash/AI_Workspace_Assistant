@@ -13,7 +13,8 @@ from app.repositories.emails import EmailsRepository
 from app.repositories.sync_state import SyncStateRepository
 from app.services import graph_client
 from app.services.ai_extraction import extract_user
-from app.services.graph_tokens_service import get_valid_access_token, refresh_and_persist
+from app.repositories.connected_accounts import ConnectedAccountsRepository
+from app.services.account_tokens import get_valid_access_token, refresh_and_persist
 
 logger = logging.getLogger(__name__)
 
@@ -185,18 +186,36 @@ async def sync_chat(pool: asyncpg.Pool, user_id: uuid.UUID, access_token: str) -
     await sync_state.upsert(user_id, "chat", None, "ok")
 
 
-async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
-    access_token = await get_valid_access_token(pool, user_id)
+async def sync_account(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID
+) -> None:
+    """Sync one connected mailbox.
+
+    Calendar and chat run only for the primary account: a user's main calendar
+    is a single thing, and Teams chat has no equivalent on a secondary Gmail
+    mailbox. Mail runs for every account.
+    """
+    accounts = ConnectedAccountsRepository(pool)
+    account = await accounts.get(user_id, account_id)
+    if account is None:
+        logger.info("Account %s is no longer connected; nothing to sync", account_id)
+        return
+
+    access_token = await get_valid_access_token(pool, account)
     if access_token is None:
         return
 
+    sync_fns = [sync_mail]
+    if account["is_primary"]:
+        sync_fns += [sync_calendar, sync_chat]
+
     errors: list[Exception] = []
-    for sync_fn in (sync_mail, sync_calendar, sync_chat):
+    for sync_fn in sync_fns:
         try:
             await sync_fn(pool, user_id, access_token)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
-                access_token = await refresh_and_persist(pool, user_id)
+                access_token = await refresh_and_persist(pool, account)
                 if access_token is None:
                     return
                 try:
@@ -216,6 +235,31 @@ async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
         # visible, or the AI pipeline can break on every run for every user and
         # produce no signal at all.
         logger.exception("Extraction failed after sync for user %s", user_id)
+
+    if errors:
+        raise errors[0]
+
+
+async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
+    """Sync every mailbox this user has connected.
+
+    One failing account does not stop the others - a user with a working
+    Outlook and an expired Gmail should still get their Outlook synced - but
+    the first error is re-raised afterwards so the caller can count the failure.
+    """
+    accounts = await ConnectedAccountsRepository(pool).list_for_user(user_id)
+
+    errors: list[Exception] = []
+    for account in accounts:
+        if account["connection_status"] != "connected":
+            continue
+        try:
+            await sync_account(pool, user_id, account["id"])
+        except Exception as exc:
+            logger.exception(
+                "Sync failed for %s account %s", account["provider"], account["id"]
+            )
+            errors.append(exc)
 
     if errors:
         raise errors[0]
