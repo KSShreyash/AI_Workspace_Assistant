@@ -9,6 +9,7 @@ import { parseDueDate } from '@/lib/parseDueDate'
 import { Button } from '@/app/components/ui/Button'
 import { Card } from '@/app/components/ui/Card'
 import { TasksRemainingBar } from '@/app/components/TasksRemainingBar'
+import { DashboardHero } from '@/app/components/DashboardHero'
 import { ActivityChart, type ActivityPoint } from '@/app/components/charts/ActivityChart'
 import { CategoryDonut, type Categories } from '@/app/components/charts/CategoryDonut'
 
@@ -247,11 +248,10 @@ export default function DashboardPage() {
 
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-[var(--color-fg)]">Dashboard</h1>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">Connected as {status.email}</p>
-        </div>
+      <DashboardHero name={status.email?.split('@')[0] ?? null} now={new Date()} />
+
+      <div className="mt-6 flex items-center justify-between">
+        <p className="text-sm text-[var(--color-muted)]">Connected as {status.email}</p>
 
         <div className="flex gap-3">
           <Button onClick={() => runTrigger('sync')} disabled={pending !== null}>

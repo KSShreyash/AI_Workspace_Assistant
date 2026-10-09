@@ -83,3 +83,23 @@ class CalendarEventsRepository:
             start,
             end,
         )
+
+    async def list_upcoming(self, user_id: uuid.UUID, limit: int = 50) -> list[asyncpg.Record]:
+        """Events starting from now, soonest first.
+
+        start_time is nullable - Graph can return an event whose start does not
+        parse - and an event with no start cannot be placed on a calendar, so
+        those are excluded rather than rendered at an arbitrary position.
+        """
+        return await self._pool.fetch(
+            """
+            select * from public.calendar_events
+            where user_id = $1
+              and start_time is not null
+              and start_time >= now()
+            order by start_time asc
+            limit $2
+            """,
+            user_id,
+            limit,
+        )

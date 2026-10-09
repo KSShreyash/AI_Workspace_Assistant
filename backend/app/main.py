@@ -3,7 +3,19 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import action_items, auth, contacts, dashboard, extraction, me, scheduling, search, sync
+from app.api.v1 import (
+    action_items,
+    auth,
+    calendar,
+    contacts,
+    dashboard,
+    extraction,
+    insights,
+    me,
+    scheduling,
+    search,
+    sync,
+)
 from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +39,8 @@ app.include_router(scheduling.router)
 app.include_router(search.router)
 app.include_router(sync.router)
 app.include_router(extraction.router)
+app.include_router(insights.router)
+app.include_router(calendar.router)
 
 
 @app.get("/health")

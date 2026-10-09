@@ -120,10 +120,21 @@ deliberate engineering choice.
 
 ## 3. Open questions
 
-### Q1 — Is Google Calendar in scope? (blocks job 2 only)
+### Q1 — Is Google Calendar in scope? RESOLVED: YES
 
-**Unanswered.** This document assumes **out of scope**: email only. Calendar and Teams
-chat stay Microsoft-only.
+**Decided 2026-10-09: in scope.** Job 2 covers Gmail *and* Google Calendar, not
+email alone. Teams chat stays Microsoft-only, because Google has no equivalent.
+
+Consequences, all of which widen job 2 from the original estimate:
+
+- Google OAuth requests `gmail.readonly` **and** `calendar` scopes.
+- `calendar_events` gains the same `account_id` foreign key as `emails`.
+- Scheduling needs a provider-agnostic interface: creating an event is
+  `POST /me/events` on Graph and `events.insert` on Google, with different payload
+  shapes and different free/busy queries.
+- Free-slot suggestion must union busy blocks across **every** connected calendar,
+  or it will offer times the user is already booked in the other one. This is the
+  part most likely to be got wrong.
 
 Why it matters: the user's stated purpose includes "daily work planning," and the
 scheduler's entire job is booking follow-ups onto a calendar. If the user's actual
@@ -1089,13 +1100,15 @@ starting with job 1.
   action items.** Open work is the one signal the app already models, and the one
   that changes as the user works rather than only as mail arrives. Revisit if it
   reads wrong in practice.
-- **§7.7 — animated parallax hero, or static `main.webp`?** The layered assets support
-  parallax, but static is lighter, simpler, and never janky on a cold Render dyno.
-- **§7.1 — what goes on the Insights page?** It is the one nav item the mockup names but
-  never shows. Without a definition it cannot be planned. Candidates: response-time
-  trends, who you owe most, busiest senders, extraction accuracy over time. If nothing
-  compelling comes to mind, cut it from the nav — seven items with one empty is worse
-  than six that all work.
+- ~~§7.7 — animated parallax hero, or static `main.webp`?~~ **Decided: static.**
+  `main.webp` alone (67 KB); the five `layer-*` files stay unused in `assets/` rather
+  than shipping 645 KB for motion that was not wanted.
+- ~~§7.1 — what goes on the Insights page?~~ **Decided: keep it.** Scope set to three
+  things the existing schema can actually answer, rather than inventing metrics:
+  **who you owe work to and who owes you** (action items by contact and direction),
+  **busiest correspondents** (emails by sender), and **pipeline health** (how much mail
+  was extracted, skipped as bulk, or failed - readable now that §5.2 and §5.5 record
+  both).
 
 **Change log for this document**
 

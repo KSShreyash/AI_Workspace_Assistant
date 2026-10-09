@@ -5,11 +5,13 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import {
+  CalendarDays,
   ChevronsLeft,
   ChevronsRight,
   LayoutDashboard,
   ListTodo,
   LogOut,
+  LineChart,
   Search,
   Settings,
   Users,
@@ -23,6 +25,8 @@ const NAV_LINKS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/planner', label: 'Tasks', icon: ListTodo },
   { href: '/contacts', label: 'People', icon: Users },
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays },
+  { href: '/insights', label: 'Insights', icon: LineChart },
   { href: '/search', label: 'Search', icon: Search },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
