@@ -50,7 +50,7 @@ Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
 Frontend: `cd frontend && npx vitest run` - **186 tests pass**.
 Only the database container runs; see the note in §11.3 about Auth not starting.
 
-Migrations number 15 (through `20261009000004_emails_classification.sql`).
+Migrations number 14 (through `20261009000004_emails_classification.sql`).
 `npx supabase db reset --local` replays the whole chain from empty, which is
 worth re-running after any migration change - it is the only check that a fresh
 deploy will work.
