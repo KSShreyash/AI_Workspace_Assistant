@@ -22,6 +22,13 @@ services:
       # /common accepts both personal (outlook.com, hotmail) and work/school accounts
       - key: MS_AUTHORITY
         value: https://login.microsoftonline.com/common
+      # Google OAuth, for Gmail and Google Calendar. Optional: both default to
+      # empty so a Microsoft-only deployment still boots. Leave them unset and
+      # every Google mailbox fails to refresh and is marked needs_reauth.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
       # No space after the comma - Starlette compares origins literally, and a
       # leading space would silently never match.
       - key: CORS_ALLOW_ORIGINS
