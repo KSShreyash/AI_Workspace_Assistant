@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     ms_client_id: str
     ms_client_secret: str
     ms_authority: str = "https://login.microsoftonline.com/common"
+
+    # Google OAuth, for Gmail and Google Calendar. Defaulted to empty rather
+    # than required: a deployment that only connects Microsoft mailboxes should
+    # still boot, and the Google paths are unreachable without a connected
+    # Google account anyway.
+    google_client_id: str = ""
+    google_client_secret: str = ""
     cors_allow_origins: str = "http://localhost:3000"
     sync_secret: str
 
