@@ -9,6 +9,20 @@ import { GOOGLE_RESOURCE_SCOPES, GRAPH_RESOURCE_SCOPES } from '@/lib/graph-scope
 
 const GRAPH_TOKENS_TIMEOUT_MS = 30000
 
+/**
+ * Where to go once the mailbox is stored.
+ *
+ * `next` comes from the URL and is therefore attacker-controllable, so only a
+ * same-site path is honoured - pushing it unchecked would make this an open
+ * redirect.
+ */
+function safeNext(raw: string | null): string {
+  if (raw && raw.startsWith('/') && !raw.startsWith('//')) {
+    return raw
+  }
+  return '/dashboard'
+}
+
 export default function CallbackPage() {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
@@ -33,8 +47,19 @@ export default function CallbackPage() {
         // for the account. The backend keys mailboxes on
         // (user, provider, provider_account_id), so without these a reconnect
         // cannot be told apart from connecting a brand new mailbox.
+        //
+        // The provider is carried on the redirect URL by whoever started the
+        // flow. It cannot be inferred from the session: after linking a second
+        // mailbox the user holds several identities, and their order says
+        // nothing about which one issued provider_token. Guessing the first
+        // match would overwrite a working mailbox's tokens with another
+        // provider's and never store the new one at all.
+        const params = new URLSearchParams(window.location.search)
+        const authorised = params.get('provider')
+
         const identities = session.user?.identities ?? []
         const identity =
+          (authorised ? identities.find((i) => i.provider === authorised) : undefined) ??
           identities.find((i) => i.provider === 'azure' || i.provider === 'google') ??
           identities[0]
 
@@ -90,7 +115,7 @@ export default function CallbackPage() {
           return
         }
 
-        router.push('/dashboard')
+        router.push(safeNext(params.get('next')))
       } catch {
         setError('Could not save your Microsoft connection. Please try again.')
       }

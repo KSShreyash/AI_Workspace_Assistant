@@ -178,3 +178,99 @@ describe('CallbackPage account identity', () => {
     expect(global.fetch).not.toHaveBeenCalled()
   })
 })
+
+describe('CallbackPage after linking a second mailbox', () => {
+  /** A session that holds two identities, as it does after linkIdentity. */
+  function linkedSession() {
+    return {
+      data: {
+        session: {
+          access_token: 'supabase-jwt',
+          provider_token: 'google-access',
+          provider_refresh_token: 'google-refresh',
+          user: {
+            email: 'work@example.com',
+            identities: [
+              // Deliberately first: the Microsoft identity is the older one, so
+              // list order is the opposite of what was just authorised.
+              { id: 'ms-abc', provider: 'azure', identity_data: { email: 'work@example.com' } },
+              {
+                id: 'google-xyz',
+                provider: 'google',
+                identity_data: { email: 'personal@gmail.com' },
+              },
+            ],
+          },
+        },
+      },
+      error: null,
+    }
+  }
+
+  beforeEach(() => {
+    getSessionMock.mockReset()
+    pushMock.mockReset()
+    process.env.NEXT_PUBLIC_API_BASE_URL = 'https://api.example.com'
+    global.fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    window.history.replaceState({}, '', '/callback')
+  })
+
+  it('files the tokens under the mailbox that was just authorised', async () => {
+    // Identity order says nothing about which one issued provider_token. Taking
+    // the first match would overwrite the Microsoft mailbox's tokens with
+    // Google ones, breaking a working connection and never storing the new one.
+    window.history.replaceState({}, '', '/callback?provider=google&next=%2Fsettings')
+    getSessionMock.mockResolvedValue(linkedSession())
+
+    render(<CallbackPage />)
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled())
+    const [, requestInit] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = JSON.parse(requestInit.body as string)
+
+    expect(body.provider).toBe('google')
+    expect(body.provider_account_id).toBe('google-xyz')
+    expect(body.email_address).toBe('personal@gmail.com')
+  })
+
+  it('returns to where the link was started from', async () => {
+    window.history.replaceState({}, '', '/callback?provider=google&next=%2Fsettings')
+    getSessionMock.mockResolvedValue(linkedSession())
+
+    render(<CallbackPage />)
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/settings'))
+  })
+
+  it('still defaults to the dashboard on a plain sign-in', async () => {
+    getSessionMock.mockResolvedValue(linkedSession())
+
+    render(<CallbackPage />)
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/dashboard'))
+  })
+
+  it('refuses an off-site next target', async () => {
+    // next comes from the URL, so it is attacker-controllable. Pushing it
+    // unchecked turns the callback into an open redirect.
+    window.history.replaceState({}, '', '/callback?provider=google&next=https%3A%2F%2Fevil.example')
+    getSessionMock.mockResolvedValue(linkedSession())
+
+    render(<CallbackPage />)
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/dashboard'))
+  })
+
+  it('sends the Google scopes when Google was authorised', async () => {
+    window.history.replaceState({}, '', '/callback?provider=google')
+    getSessionMock.mockResolvedValue(linkedSession())
+
+    render(<CallbackPage />)
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled())
+    const [, requestInit] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const body = JSON.parse(requestInit.body as string)
+
+    expect(body.scopes.join(' ')).toContain('gmail.readonly')
+  })
+})
