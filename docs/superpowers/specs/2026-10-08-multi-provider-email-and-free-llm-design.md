@@ -1,8 +1,9 @@
 # Multi-Provider Email + Free LLM — Design
 
 **Date:** 2026-10-08
-**Status:** Job 0 complete. Job 1 largely implemented. Job 4a complete.
-See the progress table in §0 before starting anything.
+**Status:** Jobs 0 (local), 1, 3a, 4a-4e, 4g complete. Job 2 in progress - the
+Gmail half is done; Google Calendar, the link-account flow and the Settings UI
+remain. See the progress table in §0 before starting anything.
 **Baseline commit:** `7fe7f1a`
 
 ---
@@ -30,14 +31,52 @@ See the progress table in §0 before starting anything.
 | Job 4b | nav shell, next/link, Settings page, lint clean | **done** |
 | Job 4c | `/api/dashboard/stats` aggregates | **done** |
 | Job 4d | stat tiles, activity chart, category donut | **done** - palette validated |
-| Job 4e | parallax hero | **not started** - needs the §10 decision |
-| Job 4f | Emails page | **not started** - needs job 2 |
-| Job 4g | Insights + Calendar | **not started** - Insights scope undefined (§10) |
-| Job 2 | multi-provider email | **not started** - blocked on Q1 (§3) |
+| Job 4e | static hero | **done** - static was chosen over parallax (§10) |
+| Job 4f | Emails page | **not started** - needs the rest of job 2 |
+| Job 4g | Insights + Calendar | **done** - both in scope per §10 |
+| Job 2 | §6.1 `connected_accounts` replaces `ms_graph_tokens` | **done** |
+| Job 2 | §6.2 `account_id` on synced rows, `graph_*` to `provider_*` | **done** - chain replays clean from empty |
+| Job 2 | §6.4 `gmail_client.py` | **done** - 41 tests |
+| Job 2 | §6.4 `sync_gmail` + provider dispatch for sync and refresh | **done** - 16 tests |
+| Job 2 | §6.5 advisory lock, one sync per user | **done** - 8 tests |
+| Job 3 | provider classification reaches the filter | **done** - the §5.5 tier-2 rule was dead code |
+| Job 2 | §6.4 Google Calendar + union free/busy | **not started** |
+| Job 2 | §6.3 `linkIdentity` flow, provider-aware `/api/auth/accounts` | **not started** |
+| Job 2 | multi-account Settings UI | **not started** |
 
 Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
-`cd backend && .venv/Scripts/python.exe -m pytest -q`. Only the database
-container runs; see the note in §11.3 about Auth not starting.
+`cd backend && .venv/Scripts/python.exe -m pytest -q` - **332 tests pass**.
+Only the database container runs; see the note in §11.3 about Auth not starting.
+
+Migrations now number 14 (through `20261009000004_emails_classification.sql`).
+`npx supabase db reset --local` replays the whole chain from empty, which is
+worth re-running after any migration change - it is the only check that a fresh
+deploy will work.
+
+### Bugs found and fixed while implementing job 2
+
+These were not in the original §8 audit; they surfaced during the port and are
+worth knowing about if any of this is revisited.
+
+1. **`scheduling.py` still wrote `graph_event_id`** after the rename - a
+   production break, not a test artifact.
+2. **`connected_accounts.upsert` demoted the primary mailbox** whenever it was
+   called with `is_primary=False`, which is what every token refresh does. The
+   user would silently lose calendar and chat. Fixed with
+   `is_primary = excluded.is_primary or public.connected_accounts.is_primary`.
+3. **Token refresh always called msal.** A Google account therefore failed
+   refresh, was marked `needs_reauth`, and reconnecting produced the same Google
+   token - an unrecoverable loop. `GoogleRefreshError` also had to be caught
+   alongside `GraphRefreshError`, or a revoked Gmail consent became an unhandled
+   exception that aborted the whole run.
+4. **Calendar and chat ran for any primary account.** A Gmail primary would have
+   called Teams with a Google token on every run.
+5. **Two deletes silently matched nothing** after being rekeyed from `user_id` to
+   `account_id`; the argument types are identical so nothing complained. Both are
+   now keyword-only.
+6. **The §5.5 tier-2 filter rule was unreachable.** Nothing stored a provider
+   classification and `extract_user` never passed one, so every promotional mail
+   still cost a full LLM call - on a free tier, the limit that binds first.
 
 
 This document is the durable handoff. It is committed to git, so it is readable from
