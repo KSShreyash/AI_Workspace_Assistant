@@ -54,6 +54,48 @@ class EmailsRepository:
             classification,
         )
 
+    async def list_for_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        limit: int,
+        offset: int = 0,
+        account_id: uuid.UUID | None = None,
+    ) -> list[asyncpg.Record]:
+        """A page of mail, newest first, with the mailbox it arrived in.
+
+        Joined rather than resolved per row: a list of fifty messages would
+        otherwise be fifty extra queries, and the mailbox is what makes a merged
+        inbox readable at all.
+
+        The account filter is scoped by user_id as well as id, so a guessed
+        account id reads nothing rather than someone else's mail.
+
+        One row more than `limit` is fetched so the caller can report whether
+        there is another page without a second count query over the whole table.
+        """
+        return await self._pool.fetch(
+            """
+            select e.id, e.provider_message_id, e.subject, e.from_address, e.from_name,
+                   e.received_at, e.body_text, e.extracted_at,
+                   a.id as account_id, a.email_address as account_email,
+                   a.provider as account_provider
+            from public.emails e
+            join public.connected_accounts a on a.id = e.account_id
+            where e.user_id = $1
+              and ($4::uuid is null or e.account_id = $4)
+            -- Undated mail last rather than dropped: received_at is nullable and
+            -- a provider can omit it, and ordering that discards nulls would
+            -- hide the message instead of merely misplacing it.
+            order by e.received_at desc nulls last, e.id desc
+            limit $2 offset $3
+            """,
+            user_id,
+            limit + 1,
+            offset,
+            account_id,
+        )
+
     async def delete(self, *, account_id: uuid.UUID, provider_message_id: str) -> None:
         """Scoped to the account, not the user.
 

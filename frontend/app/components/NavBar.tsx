@@ -9,9 +9,10 @@ import {
   ChevronsLeft,
   ChevronsRight,
   LayoutDashboard,
+  LineChart,
   ListTodo,
   LogOut,
-  LineChart,
+  Mail,
   Search,
   Settings,
   Users,
@@ -23,6 +24,7 @@ import { Button } from '@/app/components/ui/Button'
 
 const NAV_LINKS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/emails', label: 'Emails', icon: Mail },
   { href: '/planner', label: 'Tasks', icon: ListTodo },
   { href: '/contacts', label: 'People', icon: Users },
   { href: '/calendar', label: 'Calendar', icon: CalendarDays },

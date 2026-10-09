@@ -1,13 +1,12 @@
 import json
 import logging
-import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from html import unescape
 
 import asyncpg
 
 from app.core.config import settings
+from app.core.text import strip_html
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.llm_quota import LlmQuotaRepository
@@ -31,15 +30,6 @@ _TABLES = {
     "calendar_event": "calendar_events",
     "chat_message": "chat_messages",
 }
-
-
-def _strip_html(value: str | None) -> str | None:
-    if not value:
-        return value
-    text = re.sub(r"<[^>]+>", " ", value)
-    text = unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
 
 
 def _truncate_body(value: str | None) -> str:
@@ -206,7 +196,7 @@ async def _extract_pending_emails(
     processed = 0
     for row in rows:
         try:
-            body = _strip_html(row["body_text"])
+            body = strip_html(row["body_text"])
             keep, reason = should_extract(
                 {
                     "from_address": row["from_address"],
@@ -252,7 +242,7 @@ async def _extract_pending_calendar_events(
     processed = 0
     for row in rows:
         try:
-            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(_strip_html(row['body_text']))}"
+            content = f"Subject: {row['subject'] or ''}\n\n{_truncate_body(strip_html(row['body_text']))}"
 
             raw_people: list[tuple[str | None, str | None]] = []
             if row["organizer"]:
@@ -309,7 +299,7 @@ async def _extract_pending_chat_messages(
     processed = 0
     for row in rows:
         try:
-            body = _strip_html(row["content"])
+            body = strip_html(row["content"])
             # No sender address on a chat message, so only the content rules
             # apply - which is where the value is anyway: acknowledgements
             # dominate chat volume and cost a full prompt preamble each.

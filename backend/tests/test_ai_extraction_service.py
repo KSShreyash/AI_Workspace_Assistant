@@ -7,19 +7,20 @@ import pytest
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
-from app.services.ai_extraction import _parse_due_date, _process_item, _strip_html, extract_user
+from app.core.text import strip_html
+from app.services.ai_extraction import _parse_due_date, _process_item, extract_user
 
 
 def test_strip_html_removes_tags_and_unescapes_entities():
-    assert _strip_html("<p>Hi &amp; welcome</p>") == "Hi & welcome"
+    assert strip_html("<p>Hi &amp; welcome</p>") == "Hi & welcome"
 
 
 def test_strip_html_handles_none():
-    assert _strip_html(None) is None
+    assert strip_html(None) is None
 
 
 def test_strip_html_collapses_whitespace():
-    assert _strip_html("<div>a</div>\n\n<div>b</div>") == "a b"
+    assert strip_html("<div>a</div>\n\n<div>b</div>") == "a b"
 
 
 def test_parse_due_date_valid_iso():

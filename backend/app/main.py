@@ -9,6 +9,7 @@ from app.api.v1 import (
     calendar,
     contacts,
     dashboard,
+    emails,
     extraction,
     insights,
     me,
@@ -41,6 +42,7 @@ app.include_router(sync.router)
 app.include_router(extraction.router)
 app.include_router(insights.router)
 app.include_router(calendar.router)
+app.include_router(emails.router)
 
 
 @app.get("/health")
