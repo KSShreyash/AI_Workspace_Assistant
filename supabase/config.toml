@@ -328,6 +328,41 @@ max_frequency = "5s"
 # enroll_enabled = true
 # verify_enabled = true
 
+# --- OAuth providers used by this app ----------------------------------------
+# Both start disabled: `enabled = true` with an empty client_id makes GoTrue
+# reject the provider at startup, so there is nothing useful to default to.
+# Flip `enabled` to true once the matching environment variables are exported,
+# then `npx supabase stop && npx supabase start`.
+#
+# The CLI reads these from the OS environment (there is no --env-file flag), so
+# export them in the shell that runs `supabase start`:
+#
+#   PowerShell:  $env:SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID = "..."
+#   bash:        export SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID=...
+#
+# The provider's own redirect URI points at Supabase, never at this app:
+#   local       http://localhost:54321/auth/v1/callback
+#   production  https://PROJECT_REF.supabase.co/auth/v1/callback
+
+[auth.external.azure]
+enabled = false
+client_id = "env(SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_AZURE_SECRET)"
+# Leave empty for the multi-tenant /common endpoint, which accepts personal
+# (outlook.com, hotmail) as well as work/school accounts - matching the
+# MS_AUTHORITY the backend uses. Only set this for a single-tenant app.
+url = ""
+
+[auth.external.google]
+enabled = false
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+# Google does not return a nonce on the local flow, so sign-in fails with a
+# nonce mismatch unless this is skipped. Local only - the cloud project has no
+# such setting and needs none.
+skip_nonce_check = true
+
+
 # Use an external OAuth provider. The full list of providers are: `apple`, `azure`, `bitbucket`,
 # `discord`, `facebook`, `github`, `gitlab`, `google`, `keycloak`, `linkedin_oidc`, `notion`, `twitch`,
 # `twitter`, `x`, `slack`, `spotify`, `workos`, `zoom`.
