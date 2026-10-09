@@ -176,7 +176,7 @@ async def test_create_meeting_retries_once_on_401(pool, test_auth_user):
     start = datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc)
     end = datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc)
 
-    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed):
+    with patch("app.services.account_tokens.graph_refresh_access_token", return_value=refreshed):
         result = await create_meeting(
             pool, user_id, item_id, item_text="Call Gina", start=start, end=end,
             online_meeting=False, contact_email="gina@example.com", contact_display_name="Gina",

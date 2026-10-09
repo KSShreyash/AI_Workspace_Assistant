@@ -413,7 +413,7 @@ async def test_sync_user_refreshes_expired_token_first(pool, test_auth_user):
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
     }
 
-    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.graph_refresh_access_token", return_value=refreshed), \
          patch("app.services.graph_sync.sync_mail") as mock_mail, \
          patch("app.services.graph_sync.sync_calendar"), \
          patch("app.services.graph_sync.sync_chat"):
@@ -436,7 +436,7 @@ async def test_sync_user_sets_needs_reauth_on_refresh_failure(pool, test_auth_us
         scopes=["Mail.Read"],
     )
 
-    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")), \
+    with patch("app.services.account_tokens.graph_refresh_access_token", side_effect=GraphRefreshError("expired")), \
          patch("app.services.graph_sync.sync_mail") as mock_mail:
         await sync_user(pool, user_id)
 
@@ -482,7 +482,7 @@ async def test_sync_user_recovers_from_401_mid_sync_by_refreshing(pool, test_aut
             raise unauthorized
         assert token == "recovered-access"
 
-    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.graph_refresh_access_token", return_value=refreshed), \
          patch("app.services.graph_sync.sync_mail", side_effect=fake_sync_mail), \
          patch("app.services.graph_sync.sync_calendar") as mock_calendar, \
          patch("app.services.graph_sync.sync_chat") as mock_chat:
@@ -509,7 +509,7 @@ async def test_sync_user_sets_needs_reauth_when_401_mid_sync_refresh_fails(pool,
     request = httpx.Request("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta")
     unauthorized = httpx.HTTPStatusError("unauthorized", request=request, response=httpx.Response(401, request=request))
 
-    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")), \
+    with patch("app.services.account_tokens.graph_refresh_access_token", side_effect=GraphRefreshError("expired")), \
          patch("app.services.graph_sync.sync_mail", side_effect=unauthorized), \
          patch("app.services.graph_sync.sync_calendar") as mock_calendar, \
          patch("app.services.graph_sync.sync_chat") as mock_chat:

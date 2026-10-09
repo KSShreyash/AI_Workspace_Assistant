@@ -7,7 +7,10 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.security import decrypt_token, encrypt_token
 from app.repositories.connected_accounts import ConnectedAccountsRepository
-from app.services.graph_client import GraphRefreshError, refresh_access_token
+from app.services.gmail_client import GoogleRefreshError
+from app.services.gmail_client import refresh_access_token as google_refresh_access_token
+from app.services.graph_client import GraphRefreshError
+from app.services.graph_client import refresh_access_token as graph_refresh_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,25 @@ async def get_primary_account(
     return await ConnectedAccountsRepository(pool).get_primary(user_id)
 
 
+async def _redeem(account: asyncpg.Record, refresh_token: str) -> dict:
+    """Redeem a refresh token at the provider that issued it.
+
+    Not optional: sending a Google refresh token to Microsoft fails, and the
+    account would be marked needs_reauth even though its credentials are fine -
+    an unrecoverable loop, since reconnecting produces the same Google token.
+
+    Both calls are blocking (msal, and a synchronous httpx post), so both go to
+    a thread rather than stalling the event loop.
+    """
+    if account["provider"] == "google":
+        return await run_in_threadpool(google_refresh_access_token, refresh_token)
+    if account["provider"] == "microsoft":
+        return await run_in_threadpool(
+            graph_refresh_access_token, refresh_token, scopes=list(account["scopes"])
+        )
+    raise ValueError(f"no refresh path for provider {account['provider']!r}")
+
+
 async def refresh_and_persist(pool: asyncpg.Pool, account: asyncpg.Record) -> str | None:
     """Redeem the stored refresh token for this one account.
 
@@ -35,12 +57,10 @@ async def refresh_and_persist(pool: asyncpg.Pool, account: asyncpg.Record) -> st
     repo = ConnectedAccountsRepository(pool)
 
     try:
-        refreshed = await run_in_threadpool(
-            refresh_access_token,
-            decrypt_token(account["encrypted_refresh_token"]),
-            scopes=list(account["scopes"]),
-        )
-    except GraphRefreshError as exc:
+        refreshed = await _redeem(account, decrypt_token(account["encrypted_refresh_token"]))
+    # Each provider raises its own type. Catching only one turns a revoked
+    # consent on the other into an unhandled exception that aborts the run.
+    except (GraphRefreshError, GoogleRefreshError) as exc:
         logger.warning(
             "Refresh failed for %s account %s: %s", account["provider"], account["id"], exc
         )

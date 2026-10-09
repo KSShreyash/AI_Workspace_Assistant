@@ -55,7 +55,7 @@ async def test_graph_status_refreshes_expired_token(pool, test_auth_user):
         "refresh_token": "new-refresh",
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
     }
-    with patch("app.services.account_tokens.refresh_access_token", return_value=refreshed), \
+    with patch("app.services.account_tokens.graph_refresh_access_token", return_value=refreshed), \
          patch("app.api.v1.me.get_me", new=AsyncMock(return_value={"mail": email})):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -85,7 +85,7 @@ async def test_graph_status_sets_needs_reauth_on_refresh_failure(pool, test_auth
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
 
-    with patch("app.services.account_tokens.refresh_access_token", side_effect=GraphRefreshError("expired")):
+    with patch("app.services.account_tokens.graph_refresh_access_token", side_effect=GraphRefreshError("expired")):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/me/graph-status")

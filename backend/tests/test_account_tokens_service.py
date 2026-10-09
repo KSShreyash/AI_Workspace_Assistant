@@ -49,7 +49,7 @@ async def test_a_live_token_is_returned_without_contacting_the_provider(pool, te
     await ProfilesRepository(pool).upsert(user_id, email)
     account = await _connect(pool, user_id, email)
 
-    with patch("app.services.account_tokens.refresh_access_token") as refresh:
+    with patch("app.services.account_tokens.graph_refresh_access_token") as refresh:
         token = await get_valid_access_token(pool, account)
 
     assert token == "live-access"
@@ -78,7 +78,7 @@ async def test_a_token_expiring_imminently_is_refreshed_early(pool, test_auth_us
     account = await repo.get(user_id, account_id)
 
     with patch(
-        "app.services.account_tokens.refresh_access_token",
+        "app.services.account_tokens.graph_refresh_access_token",
         return_value={
             "access_token": "fresh",
             "refresh_token": "r2",
@@ -97,7 +97,7 @@ async def test_a_refreshed_token_is_persisted_encrypted(pool, test_auth_user):
     account = await _connect(pool, user_id, email, expires_in_hours=-1)
 
     with patch(
-        "app.services.account_tokens.refresh_access_token",
+        "app.services.account_tokens.graph_refresh_access_token",
         return_value={
             "access_token": "fresh",
             "refresh_token": "fresh-refresh",
@@ -120,7 +120,7 @@ async def test_a_failed_refresh_marks_only_that_account(pool, test_auth_user):
     good = await _connect(pool, user_id, email, provider="google", pid="g-good")
 
     with patch(
-        "app.services.account_tokens.refresh_access_token",
+        "app.services.account_tokens.graph_refresh_access_token",
         side_effect=GraphRefreshError("consent revoked"),
     ):
         token = await refresh_and_persist(pool, bad)
@@ -159,7 +159,7 @@ async def test_refreshing_an_account_that_has_been_removed_is_not_an_error(pool,
     await ConnectedAccountsRepository(pool).delete(user_id, account["id"])
 
     with patch(
-        "app.services.account_tokens.refresh_access_token",
+        "app.services.account_tokens.graph_refresh_access_token",
         return_value={
             "access_token": "fresh",
             "refresh_token": "r",
