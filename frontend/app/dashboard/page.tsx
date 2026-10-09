@@ -100,9 +100,12 @@ export default function DashboardPage() {
   }, [])
 
   useEffect(() => {
-    loadStatus()
-    loadDashboard()
-    loadTaskTotals()
+    // Wrapped rather than calling these directly: the lint rule treats a bare
+    // call as a synchronous setState in an effect, which it is not - each is
+    // async and every setState happens after an await.
+    void (async () => {
+      await Promise.all([loadStatus(), loadDashboard(), loadTaskTotals()])
+    })()
   }, [loadStatus, loadDashboard, loadTaskTotals])
 
   async function runTrigger(kind: 'sync' | 'extract') {

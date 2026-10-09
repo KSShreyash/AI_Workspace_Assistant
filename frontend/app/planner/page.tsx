@@ -106,7 +106,12 @@ export default function PlannerPage() {
   }, [direction, router])
 
   useEffect(() => {
-    load()
+    // Wrapped rather than calling load() directly: the lint rule treats a bare
+    // call as a synchronous setState in an effect, which it is not - load is
+    // async and every setState in it happens after an await.
+    void (async () => {
+      await load()
+    })()
   }, [load])
 
   async function toggleDone(item: ActionItem) {
@@ -190,7 +195,7 @@ export default function PlannerPage() {
 
   return (
     <div className="p-8">
-      <h1 className="text-xl font-bold text-[var(--color-fg)]">Planner</h1>
+      <h1 className="text-xl font-bold text-[var(--color-fg)]">Tasks</h1>
 
       <div className="mt-4 flex flex-wrap items-center gap-4">
         <div className="flex flex-wrap gap-2">
@@ -223,6 +228,7 @@ export default function PlannerPage() {
 
         <select
           value={direction}
+          aria-label="Who the task is for"
           onChange={(e) => setDirection(e.target.value as Direction)}
           className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-fg)] focus:border-[var(--color-accent)] focus:outline-none"
         >

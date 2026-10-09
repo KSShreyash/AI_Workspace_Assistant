@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 const getSessionMock = vi.fn()
 
@@ -20,7 +20,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/me/graph-status')
 
-    const call = (global.fetch as any).mock.calls[0]
+    const call = (global.fetch as unknown as Mock).mock.calls[0]
     expect(call[0]).toBe('https://api.example.com/api/me/graph-status')
     const headers: Headers = call[1].headers
     expect(headers.get('Authorization')).toBe('Bearer jwt-123')
@@ -31,7 +31,7 @@ describe('apiFetch', () => {
 
     await apiFetch('/api/me/graph-status')
 
-    const call = (global.fetch as any).mock.calls[0]
+    const call = (global.fetch as unknown as Mock).mock.calls[0]
     const headers: Headers = call[1].headers
     expect(headers.get('Authorization')).toBeNull()
   })

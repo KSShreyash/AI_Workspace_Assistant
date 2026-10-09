@@ -86,7 +86,12 @@ function ContactProfileContent() {
   }, [id, router])
 
   useEffect(() => {
-    load()
+    // Wrapped rather than calling load() directly: the lint rule treats a bare
+    // call as a synchronous setState in an effect, which it is not - load is
+    // async and every setState in it happens after an await.
+    void (async () => {
+      await load()
+    })()
   }, [load])
 
   if (state.state === 'loading') {

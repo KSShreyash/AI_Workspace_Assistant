@@ -1,9 +1,19 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { ChevronsLeft, ChevronsRight, LayoutDashboard, ListTodo, LogOut, Search, Users } from 'lucide-react'
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  LayoutDashboard,
+  ListTodo,
+  LogOut,
+  Search,
+  Settings,
+  Users,
+} from 'lucide-react'
 
 import { apiFetch } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
@@ -11,21 +21,58 @@ import { Button } from '@/app/components/ui/Button'
 
 const NAV_LINKS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/contacts', label: 'Contacts', icon: Users },
-  { href: '/planner', label: 'Planner', icon: ListTodo },
+  { href: '/planner', label: 'Tasks', icon: ListTodo },
+  { href: '/contacts', label: 'People', icon: Users },
   { href: '/search', label: 'Search', icon: Search },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 const CHROME_HIDDEN_PATHS = new Set(['/', '/login', '/callback'])
 const COLLAPSE_STORAGE_KEY = 'nav-collapsed'
 
+/**
+ * The collapsed flag lives in localStorage, which is external state, so it is
+ * read through useSyncExternalStore rather than copied into component state.
+ *
+ * getServerSnapshot returns false, which is what makes this hydration-safe:
+ * next.config sets output: "export", so pages are prerendered with no window,
+ * and reading localStorage during the first render would make the client
+ * disagree with the prerendered HTML whenever the stored value is not default.
+ */
+const collapseListeners = new Set<() => void>()
+
+function subscribeToCollapse(onChange: () => void) {
+  collapseListeners.add(onChange)
+  window.addEventListener('storage', onChange)
+  return () => {
+    collapseListeners.delete(onChange)
+    window.removeEventListener('storage', onChange)
+  }
+}
+
+function getCollapseSnapshot() {
+  return window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === 'true'
+}
+
+function getCollapseServerSnapshot() {
+  return false
+}
+
+function writeCollapsed(next: boolean) {
+  window.localStorage.setItem(COLLAPSE_STORAGE_KEY, String(next))
+  // `storage` only fires in *other* tabs, so notify this one explicitly.
+  collapseListeners.forEach((listener) => listener())
+}
+
 export default function NavBar() {
   const pathname = usePathname()
   const router = useRouter()
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === 'true'
-  })
+
+  const collapsed = useSyncExternalStore(
+    subscribeToCollapse,
+    getCollapseSnapshot,
+    getCollapseServerSnapshot
+  )
 
   const [email, setEmail] = useState<string | null>(null)
 
@@ -48,9 +95,7 @@ export default function NavBar() {
   if (CHROME_HIDDEN_PATHS.has(pathname)) return null
 
   function toggleCollapsed() {
-    const next = !collapsed
-    setCollapsed(next)
-    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, String(next))
+    writeCollapsed(!collapsed)
   }
 
   async function handleSignOut() {
@@ -68,7 +113,7 @@ export default function NavBar() {
       <div className="mb-8 flex items-center justify-between px-1">
         {!collapsed && (
           <span className="truncate text-sm font-semibold tracking-wide text-[var(--color-fg)]">
-            AI Assistant
+            AI Workspace Assistant
           </span>
         )}
         <Button
@@ -85,7 +130,7 @@ export default function NavBar() {
           const active = pathname === link.href || pathname.startsWith(`${link.href}/`)
           const Icon = link.icon
           return (
-            <a
+            <Link
               key={link.href}
               href={link.href}
               aria-current={active ? 'page' : undefined}
@@ -109,7 +154,7 @@ export default function NavBar() {
               )}
               <Icon size={18} className="relative shrink-0" aria-hidden="true" />
               {!collapsed && <span className="relative truncate">{link.label}</span>}
-            </a>
+            </Link>
           )
         })}
       </div>

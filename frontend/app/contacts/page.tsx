@@ -74,7 +74,7 @@ export default function ContactsPage() {
 
   return (
     <div className="p-8">
-      <h1 className="text-xl font-bold text-[var(--color-fg)]">Contacts</h1>
+      <h1 className="text-xl font-bold text-[var(--color-fg)]">People</h1>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Input

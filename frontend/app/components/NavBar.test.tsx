@@ -12,6 +12,14 @@ vi.mock('@/lib/supabase/client', () => ({
 let mockPathname = '/dashboard'
 const pushMock = vi.fn()
 
+vi.mock('next/link', () => ({
+  default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
+    <a href={href} data-client-nav="true" {...rest}>
+      {children}
+    </a>
+  ),
+}))
+
 vi.mock('next/navigation', () => ({
   usePathname: () => mockPathname,
   useRouter: () => ({ push: pushMock }),
@@ -38,15 +46,15 @@ describe('NavBar', () => {
   it('renders all nav links with the correct hrefs', () => {
     render(<NavBar />)
     expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/dashboard')
-    expect(screen.getByRole('link', { name: /contacts/i })).toHaveAttribute('href', '/contacts')
-    expect(screen.getByRole('link', { name: /planner/i })).toHaveAttribute('href', '/planner')
+    expect(screen.getByRole('link', { name: /people/i })).toHaveAttribute('href', '/contacts')
+    expect(screen.getByRole('link', { name: /tasks/i })).toHaveAttribute('href', '/planner')
     expect(screen.getByRole('link', { name: /search/i })).toHaveAttribute('href', '/search')
   })
 
   it('marks only the active link with aria-current', () => {
     mockPathname = '/contacts'
     render(<NavBar />)
-    expect(screen.getByRole('link', { name: /contacts/i })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: /people/i })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: /dashboard/i })).not.toHaveAttribute('aria-current')
   })
 
@@ -86,5 +94,42 @@ describe('NavBar', () => {
     mockPathname = '/login'
     render(<NavBar />)
     expect(apiFetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('NavBar client-side navigation and labels', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    apiFetchMock.mockResolvedValue(new Response(null, { status: 401 }))
+    window.localStorage.clear()
+    mockPathname = '/dashboard'
+  })
+
+  it('navigates client-side instead of reloading the page', () => {
+    // Plain <a href> re-downloads and re-executes the whole bundle on every nav
+    // click, refetches all data, and makes PageTransition's exit animation and
+    // the layoutId shared-element animations dead code - the document is
+    // replaced before either can run.
+    render(<NavBar />)
+    for (const name of [/dashboard/i, /tasks/i, /people/i]) {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('data-client-nav', 'true')
+    }
+  })
+
+  it('uses the product vocabulary from the design', () => {
+    render(<NavBar />)
+    expect(screen.getByRole('link', { name: /tasks/i })).toHaveAttribute('href', '/planner')
+    expect(screen.getByRole('link', { name: /people/i })).toHaveAttribute('href', '/contacts')
+  })
+
+  it('offers a settings route for managing connected accounts', () => {
+    render(<NavBar />)
+    expect(screen.getByRole('link', { name: /settings/i })).toHaveAttribute('href', '/settings')
+  })
+
+  it('keeps a nested route highlighted in the sidebar', () => {
+    mockPathname = '/contacts/view'
+    render(<NavBar />)
+    expect(screen.getByRole('link', { name: /people/i })).toHaveAttribute('aria-current', 'page')
   })
 })

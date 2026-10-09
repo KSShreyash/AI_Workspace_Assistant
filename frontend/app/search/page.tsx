@@ -92,9 +92,10 @@ export default function SearchPage() {
 
   useEffect(() => {
     if (!query) {
+      // Invalidate any in-flight request, but do not clear state here: with an
+      // empty query the rendered result is derived below, so clearing would be
+      // a synchronous setState in an effect for no gain.
       requestId.current++
-      setResults(null)
-      setError(null)
       return
     }
 
@@ -124,6 +125,11 @@ export default function SearchPage() {
 
     return () => clearTimeout(timer)
   }, [query, router])
+
+  // Derived, not stored: with no query there is nothing to show, regardless of
+  // what the last search returned.
+  const visibleResults = query ? results : null
+  const visibleError = query ? error : null
 
   const showContacts = filter === 'all' || filter === 'people'
   const showTasks = filter === 'all' || filter === 'tasks'
@@ -184,9 +190,9 @@ export default function SearchPage() {
         </div>
       )}
 
-      {error && <p role="alert" className="mt-3 text-sm text-[var(--color-danger)]">{error}</p>}
+      {visibleError && <p role="alert" className="mt-3 text-sm text-[var(--color-danger)]">{visibleError}</p>}
 
-      {results === null ? (
+      {visibleResults === null ? (
         <EmptyState
           icon={SearchIcon}
           title="Type to search your contacts and action items."
@@ -197,11 +203,11 @@ export default function SearchPage() {
           {showContacts && (
             <>
               <h2 className="mt-6 text-sm font-semibold text-[var(--color-fg)]">Contacts</h2>
-              {results.contacts.length === 0 ? (
+              {visibleResults.contacts.length === 0 ? (
                 <p className="mt-2 text-sm text-[var(--color-muted)]">No matching contacts.</p>
               ) : (
                 <div className="mt-2 space-y-3">
-                  {results.contacts.map((contact) => (
+                  {visibleResults.contacts.map((contact) => (
                     <Card key={contact.id} className="flex items-center gap-4">
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface)] text-sm font-semibold text-[var(--color-accent)]">
                         {getInitials(contact.display_name, contact.email_address)}
@@ -227,11 +233,11 @@ export default function SearchPage() {
           {showTasks && (
             <>
               <h2 className="mt-6 text-sm font-semibold text-[var(--color-fg)]">Action Items</h2>
-              {results.action_items.length === 0 ? (
+              {visibleResults.action_items.length === 0 ? (
                 <p className="mt-2 text-sm text-[var(--color-muted)]">No matching action items.</p>
               ) : (
                 <div className="mt-2 space-y-3">
-                  {results.action_items.map((item) => (
+                  {visibleResults.action_items.map((item) => (
                     <Card key={item.id} className="flex items-center justify-between gap-4">
                       <div className="flex min-w-0 items-center gap-4">
                         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface)] text-[var(--color-accent)]">

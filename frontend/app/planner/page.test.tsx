@@ -252,3 +252,19 @@ describe('PlannerPage failure handling and local dates', () => {
     })
   })
 })
+
+describe('PlannerPage accessibility', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    apiFetchMock.mockResolvedValue(jsonResponse([]))
+    pushMock.mockReset()
+  })
+
+  it('labels the direction filter', async () => {
+    // Every Input in the app carries an aria-label; this native select did not,
+    // so a screen reader announced only its current value with no indication of
+    // what it controls.
+    render(<PlannerPage />)
+    expect(await screen.findByRole('combobox', { name: /who/i })).toBeInTheDocument()
+  })
+})
