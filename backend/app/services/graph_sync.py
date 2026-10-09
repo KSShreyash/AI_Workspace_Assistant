@@ -11,8 +11,9 @@ from app.repositories.calendar_events import CalendarEventsRepository
 from app.repositories.chat_messages import ChatMessagesRepository
 from app.repositories.emails import EmailsRepository
 from app.repositories.sync_state import SyncStateRepository
-from app.services import gmail_client, graph_client
+from app.services import gmail_client, google_calendar_client, graph_client
 from app.services.gmail_client import HistoryExpired
+from app.services.google_calendar_client import SyncTokenExpired
 from app.services.ai_extraction import extract_user
 from app.repositories.connected_accounts import ConnectedAccountsRepository
 from app.services.account_tokens import get_valid_access_token, refresh_and_persist
@@ -276,6 +277,101 @@ async def sync_calendar(
             raise
 
 
+async def _google_calendar_walk(
+    events: CalendarEventsRepository,
+    user_id: uuid.UUID,
+    account_id: uuid.UUID,
+    access_token: str,
+    sync_token: str | None,
+) -> str | None:
+    """Page through events.list. Returns the sync token to store."""
+    page_token = None
+    next_sync_token = None
+    time_min = datetime.now(timezone.utc) if sync_token is None else None
+    time_max = (
+        datetime.now(timezone.utc) + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)
+        if sync_token is None
+        else None
+    )
+
+    while True:
+        page = await google_calendar_client.fetch_events_page(
+            access_token,
+            sync_token=sync_token,
+            time_min=time_min,
+            time_max=time_max,
+            page_token=page_token,
+        )
+        for item in page["items"]:
+            event = google_calendar_client.normalize_event(item)
+            if event["removed"]:
+                # Google reports deletions as cancelled events rather than as a
+                # removal marker; upserting one would restore a deleted meeting.
+                await events.delete(
+                    account_id=account_id, provider_event_id=event["id"]
+                )
+                continue
+            await events.upsert(
+                user_id=user_id,
+                account_id=account_id,
+                provider_event_id=event["id"],
+                subject=event["subject"],
+                organizer=event["organizer"],
+                attendees=event["attendees"],
+                start_time=event["start_time"],
+                end_time=event["end_time"],
+                is_online_meeting=event["is_online_meeting"],
+                online_meeting_join_url=event["online_meeting_join_url"],
+                body_text=event["body_text"],
+            )
+
+        next_sync_token = page["next_sync_token"] or next_sync_token
+        page_token = page["next_page_token"]
+        if not page_token:
+            return next_sync_token
+
+
+async def sync_google_calendar(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID, access_token: str
+) -> None:
+    """Google Calendar's equivalent of sync_calendar.
+
+    Events land in the same table as the Microsoft ones, keyed by account, so
+    availability queries union every connected calendar without knowing any of
+    this exists.
+    """
+    sync_state = SyncStateRepository(pool)
+    events = CalendarEventsRepository(pool)
+
+    state = await sync_state.get(account_id, "calendar")
+    if state is not None and state["status"] == "not_available":
+        return
+
+    sync_token = state["delta_link"] if state else None
+
+    try:
+        try:
+            next_token = await _google_calendar_walk(
+                events, user_id, account_id, access_token, sync_token
+            )
+        except SyncTokenExpired:
+            logger.info(
+                "Calendar syncToken for account %s expired; resyncing in full", account_id
+            )
+            next_token = await _google_calendar_walk(
+                events, user_id, account_id, access_token, None
+            )
+
+        await sync_state.upsert(account_id, "calendar", next_token, "ok")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (400, 403):
+            # The user may have granted Gmail but not Calendar. Retrying every
+            # fifteen minutes forever helps nobody.
+            await sync_state.upsert(account_id, "calendar", None, "not_available")
+        else:
+            raise
+
+
 async def sync_chat(
     pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID, access_token: str
 ) -> None:
@@ -351,9 +447,18 @@ async def _sync_account_unlocked(
     # Mail runs for every account, through whichever client speaks its
     # provider. Calendar and chat are Graph-only and run on the primary
     # account - attempting Teams chat with a Google token 401s on every run.
-    sync_fns = [sync_gmail if account["provider"] == "google" else sync_mail]
-    if account["is_primary"] and account["provider"] == "microsoft":
-        sync_fns += [sync_calendar, sync_chat]
+    if account["provider"] == "google":
+        # Calendar runs for every Google account, not just a primary one: its
+        # events feed availability, and double-booking against an unread
+        # calendar is the failure this whole change exists to prevent.
+        sync_fns = [sync_gmail, sync_google_calendar]
+    else:
+        sync_fns = [sync_mail]
+        # Graph calendar and Teams chat follow the primary account. Chat has no
+        # equivalent on a Gmail mailbox, and calling Graph with a Google token
+        # 401s on every run.
+        if account["is_primary"]:
+            sync_fns += [sync_calendar, sync_chat]
 
     errors: list[Exception] = []
     for sync_fn in sync_fns:
