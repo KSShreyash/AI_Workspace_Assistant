@@ -50,10 +50,37 @@ Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
 Frontend: `cd frontend && npx vitest run` - **186 tests pass**.
 Only the database container runs; see the note in §11.3 about Auth not starting.
 
-Migrations number 14 (through `20261009000004_emails_classification.sql`).
+Migrations number 15 (through `20261009114228_revoke_data_api_access.sql`).
 `npx supabase db reset --local` replays the whole chain from empty, which is
 worth re-running after any migration change - it is the only check that a fresh
 deploy will work.
+
+### Data API posture
+
+Nothing here uses the Data API: the backend connects as `postgres` over asyncpg
+and supabase-js is used purely for Auth. `20261009114228` therefore revokes every
+`anon` / `authenticated` privilege on `public` and sets default privileges so new
+tables do not re-acquire them.
+
+Worth knowing why that mattered, because the audit showed no live hole: RLS is on
+for every table and eight of them have no policies, which already denied
+everything. The risk was that the safety came from an absence rather than a
+decision - the grants were in place and `public` is an exposed schema, so adding
+one policy to `connected_accounts` (encrypted OAuth tokens for every mailbox)
+would have published it, and nothing in that change would have looked dangerous.
+`profiles` was the one genuinely reachable table and its policies were already
+correct (`to authenticated`, `(select auth.uid()) = id`, UPDATE with both `USING`
+and `WITH CHECK`); they are kept.
+
+The same migration drops `ms_graph_tokens`, superseded by `connected_accounts`
+back in `20261009000002` (which copies its rows across first, so the drop cannot
+lose tokens). It was still shaped exactly like a live token store.
+
+Checked and already correct, so left alone: JWT verification uses the asymmetric
+JWKS endpoint rather than the legacy HS256 shared secret, which is what projects
+created after 2025-05-01 require. No views, so no `security_invoker` exposure. No
+`SECURITY DEFINER` functions. No use of `user_metadata` in any authorization
+decision. `supabase db advisors` reports no issues.
 
 ### Deliberately not built
 
