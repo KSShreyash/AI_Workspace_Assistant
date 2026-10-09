@@ -8,6 +8,7 @@ import asyncpg
 _CATEGORIES = ("work", "meeting", "follow_up", "other")
 
 _SERIES_DAYS = 7
+_UPCOMING_LIMIT = 5
 
 
 class DashboardStatsRepository:
@@ -130,6 +131,39 @@ class DashboardStatsRepository:
                 "date": row["day"].isoformat(),
                 "emails": row["emails"],
                 "tasks": row["tasks"],
+            }
+            for row in rows
+        ]
+
+    async def upcoming(self, user_id: uuid.UUID) -> list[dict]:
+        """The next few dated, still-open tasks, nearest first.
+
+        Ordered and limited in SQL. The previous dashboard fetched every action
+        item ever created and sorted them in the browser to show five.
+        """
+        rows = await self._pool.fetch(
+            """
+            select ai.id, ai.text, ai.due_date, ai.category,
+                   c.display_name as contact_display_name,
+                   c.email_address as contact_email_address
+            from public.action_items ai
+            left join public.contacts c on c.id = ai.contact_id
+            where ai.user_id = $1
+              and ai.status = 'open'
+              and ai.due_date is not null
+            order by ai.due_date asc
+            limit $2
+            """,
+            user_id,
+            _UPCOMING_LIMIT,
+        )
+        return [
+            {
+                "id": str(row["id"]),
+                "text": row["text"],
+                "due_date": row["due_date"].isoformat(),
+                "category": row["category"],
+                "contact": row["contact_display_name"] or row["contact_email_address"],
             }
             for row in rows
         ]

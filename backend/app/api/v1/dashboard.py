@@ -71,4 +71,5 @@ async def get_dashboard_stats(current_user: CurrentUser = Depends(get_current_us
         "categories": await stats.categories(user_id),
         "important_people": await stats.important_people(user_id),
         "daily": await stats.daily_series(user_id),
+        "upcoming": await stats.upcoming(user_id),
     }

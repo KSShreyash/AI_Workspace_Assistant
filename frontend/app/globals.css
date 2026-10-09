@@ -46,6 +46,21 @@
   --color-warning: #A8680F;
 
   --radius-card: 14px;
+
+  /* Chart series. Deliberately NOT the UI accent: --color-accent measures 0.079
+     chroma, below the 0.1 floor a categorical palette needs to stay readable as
+     a 2px mark - at that weight it reads grey. These four were validated as a
+     set against this surface: chroma floor passed, normal-vision separation
+     22.5, worst CVD pair 7.7 (deutan), all above 3:1 contrast.
+
+     7.7 is inside the 6-8 band, which is only legal with a secondary encoding,
+     so every chart using them also carries direct labels or a named legend -
+     identity never rests on colour alone. Order is fixed: a series keeps its
+     hue regardless of rank or filtering. */
+  --chart-series-1: #2E8B57;
+  --chart-series-2: #C2561F;
+  --chart-series-3: #3F6FB5;
+  --chart-series-4: #A07C1F;
 }
 
 @theme inline {

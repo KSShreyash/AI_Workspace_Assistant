@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -69,27 +69,19 @@ describe('DashboardPage', () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/login'))
   })
 
-  it('shows connection status, stats, and activity feed', async () => {
+  it('renders connection status and the activity feed together', async () => {
     apiFetchMock.mockImplementation((path: string) => {
       if (path === '/api/me/graph-status') {
         return Promise.resolve(jsonResponse({ graph_me: { mail: 'user@example.com' } }))
       }
-      if (path === '/api/dashboard') {
-        return Promise.resolve(jsonResponse(DASHBOARD_BODY))
-      }
-      if (path === '/api/action-items?include_done=true') {
-        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
-      }
-      throw new Error(`Unexpected path: ${path}`)
+      if (path === '/api/dashboard') return Promise.resolve(jsonResponse(DASHBOARD_BODY))
+      return Promise.resolve(jsonResponse({}))
     })
 
     render(<DashboardPage />)
-
-    await waitFor(() => expect(screen.getByText('Connected as user@example.com')).toBeInTheDocument())
-    expect(screen.getByText('3')).toBeInTheDocument()
-    expect(screen.getByText('2')).toBeInTheDocument()
-    expect(screen.getByText(/Send the deck/)).toBeInTheDocument()
-    expect(screen.getByText(/Helen/)).toBeInTheDocument()
+    expect(await screen.findByText(/connected as user@example.com/i)).toBeInTheDocument()
+    expect(screen.getByText(/send the deck/i)).toBeInTheDocument()
+    expect(screen.getByText(/updated contact: helen/i)).toBeInTheDocument()
   })
 
   it('shows a reconnect prompt on 409 needs_reauth', async () => {
@@ -166,74 +158,6 @@ describe('DashboardPage', () => {
     expect(button).not.toBeDisabled()
   })
 
-  it('shows the tasks-remaining gauge with the real open/total counts', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path === '/api/me/graph-status') {
-        return Promise.resolve(jsonResponse({ graph_me: { mail: 'user@example.com' } }))
-      }
-      if (path === '/api/dashboard') {
-        return Promise.resolve(jsonResponse(DASHBOARD_BODY))
-      }
-      if (path === '/api/action-items?include_done=true') {
-        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
-      }
-      throw new Error(`Unexpected path: ${path}`)
-    })
-
-    render(<DashboardPage />)
-
-    await waitFor(() => expect(screen.getByText('2 open of 3 total')).toBeInTheDocument())
-  })
-
-  it('shows an upcoming-tasks preview sorted by nearest due date', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path === '/api/me/graph-status') {
-        return Promise.resolve(jsonResponse({ graph_me: { mail: 'user@example.com' } }))
-      }
-      if (path === '/api/dashboard') {
-        return Promise.resolve(jsonResponse(DASHBOARD_BODY))
-      }
-      if (path === '/api/action-items?include_done=true') {
-        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
-      }
-      throw new Error(`Unexpected path: ${path}`)
-    })
-
-    render(<DashboardPage />)
-
-    await waitFor(() => expect(screen.getByText('Upcoming tasks')).toBeInTheDocument())
-    const list = screen.getByText('Upcoming tasks').closest('div') as HTMLElement
-    const items = within(list).getAllByText(/Send the proposal|Confirm the migration|Already done/)
-    expect(items.map((el) => el.textContent)).toEqual(['Confirm the migration', 'Send the proposal'])
-  })
-
-  it('leaves the gauge section blank when the action-items fetch fails', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path === '/api/me/graph-status') {
-        return Promise.resolve(jsonResponse({ graph_me: { mail: 'user@example.com' } }))
-      }
-      if (path === '/api/dashboard') {
-        return Promise.resolve(jsonResponse(DASHBOARD_BODY))
-      }
-      if (path === '/api/action-items?include_done=true') {
-        return Promise.resolve(new Response(null, { status: 500 }))
-      }
-      throw new Error(`Unexpected path: ${path}`)
-    })
-
-    render(<DashboardPage />)
-
-    await waitFor(() => expect(screen.getByText('Connected as user@example.com')).toBeInTheDocument())
-    expect(screen.queryByText(/open of .* total/)).not.toBeInTheDocument()
-  })
-})
-
-describe('DashboardPage trigger failures', () => {
-  beforeEach(() => {
-    apiFetchMock.mockReset()
-    pushMock.mockReset()
-  })
-
   function mockLoadedDashboard(onTrigger: (path: string) => Promise<Response>) {
     apiFetchMock.mockImplementation((path: string, init?: RequestInit) => {
       if (init?.method === 'POST') return onTrigger(path)
@@ -272,5 +196,73 @@ describe('DashboardPage trigger failures', () => {
     await userEvent.click(syncButton)
 
     expect(await screen.findByRole('alert')).toBeInTheDocument()
+  })
+})
+
+const STATS_BODY = {
+  emails: { this_week: 128, previous_week: 114 },
+  tasks: { this_week: 36, previous_week: 29 },
+  meetings: { this_week: 8, previous_week: 5 },
+  categories: { work: 18, meeting: 9, follow_up: 7, other: 2 },
+  important_people: 24,
+  daily: [
+    { date: '2026-10-01', emails: 12, tasks: 4 },
+    { date: '2026-10-02', emails: 18, tasks: 6 },
+    { date: '2026-10-03', emails: 9, tasks: 2 },
+    { date: '2026-10-04', emails: 22, tasks: 7 },
+    { date: '2026-10-05', emails: 14, tasks: 5 },
+    { date: '2026-10-06', emails: 25, tasks: 9 },
+    { date: '2026-10-07', emails: 20, tasks: 6 },
+  ],
+  upcoming: [
+    { id: 'u1', text: 'Review phase 2 requirements', due_date: '2026-10-09', category: 'work', contact: 'Priya Sharma' },
+    { id: 'u2', text: 'Prepare presentation slides', due_date: '2026-10-10', category: 'work', contact: 'Team Lead' },
+  ],
+}
+
+describe('DashboardPage stats', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    pushMock.mockReset()
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === '/api/me/graph-status') {
+        return Promise.resolve(jsonResponse({ connected: true, graph_me: { mail: 'me@example.com' } }))
+      }
+      if (path === '/api/dashboard') return Promise.resolve(jsonResponse(DASHBOARD_BODY))
+      if (path === '/api/dashboard/stats') return Promise.resolve(jsonResponse(STATS_BODY))
+      if (path === '/api/action-items?include_done=true') {
+        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+  })
+
+  it('shows the headline counts from the aggregate endpoint', async () => {
+    render(<DashboardPage />)
+    expect(await screen.findByText('128')).toBeInTheDocument()
+    expect(screen.getByText('24')).toBeInTheDocument()
+    // 36 appears twice on purpose: the Tasks tile and the donut total, which
+    // are the same number computed from different fields.
+    expect(screen.getAllByText('36')).toHaveLength(2)
+  })
+
+  it('shows the direction of travel against last week', async () => {
+    // A bare count says nothing about whether the week is busier than usual.
+    render(<DashboardPage />)
+    expect(await screen.findByText(/12%/)).toBeInTheDocument()
+  })
+
+  it('stops downloading every action item just to count them', async () => {
+    // The counts are computed in SQL now, so the page has no reason to pull the
+    // whole collection down and tally it in the browser.
+    render(<DashboardPage />)
+    await screen.findByText('128')
+    const paths = apiFetchMock.mock.calls.map((c) => c[0])
+    expect(paths).not.toContain('/api/action-items?include_done=true')
+  })
+
+  it('renders the category breakdown', async () => {
+    render(<DashboardPage />)
+    expect(await screen.findByText(/follow-ups/i)).toBeInTheDocument()
   })
 })

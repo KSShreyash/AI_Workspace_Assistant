@@ -27,7 +27,12 @@ See the progress table in §0 before starting anything.
 | Job 3a | four try/catch handlers, timezone bucketing | **done** |
 | Job 1 | §5.4 quota handling | **done** |
 | Job 4a | palette swap, WCAG AA verified | **done** |
-| Job 4b+ | nav shell, dashboard, parallax | **not started** |
+| Job 4b | nav shell, next/link, Settings page, lint clean | **done** |
+| Job 4c | `/api/dashboard/stats` aggregates | **done** |
+| Job 4d | stat tiles, activity chart, category donut | **done** - palette validated |
+| Job 4e | parallax hero | **not started** - needs the §10 decision |
+| Job 4f | Emails page | **not started** - needs job 2 |
+| Job 4g | Insights + Calendar | **not started** - Insights scope undefined (§10) |
 | Job 2 | multi-provider email | **not started** - blocked on Q1 (§3) |
 
 Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
@@ -1080,8 +1085,10 @@ starting with job 1.
   genuine message misfiled as `other` would be skipped.
 - §9 — does the sequencing match your priorities?
 - ~~§7.9 — which name wins?~~ **Resolved: "AI Workspace Assistant".**
-- **§7.3 — what makes a person "Important"?** The stat tile needs a definition:
-  most-emailed, has open action items, or manually starred.
+- ~~§7.3 — what makes a person "Important"?~~ **Decided: contacts with open
+  action items.** Open work is the one signal the app already models, and the one
+  that changes as the user works rather than only as mail arrives. Revisit if it
+  reads wrong in practice.
 - **§7.7 — animated parallax hero, or static `main.webp`?** The layered assets support
   parallax, but static is lighter, simpler, and never janky on a cold Render dyno.
 - **§7.1 — what goes on the Insights page?** It is the one nav item the mockup names but

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
 import { getInitials } from '@/lib/getInitials'
+import { parseDueDate } from '@/lib/parseDueDate'
 import ScheduleActionItemPanel from '@/app/components/ScheduleActionItemPanel'
 import { Badge, type BadgeVariant } from '@/app/components/ui/Badge'
 import { Checkbox } from '@/app/components/ui/Checkbox'
@@ -34,18 +35,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'noDate', label: 'No date' },
   { key: 'completed', label: 'Completed' },
 ]
-
-/**
- * Parse a YYYY-MM-DD due date as a date on the user's own calendar.
- *
- * `new Date('2026-07-17')` is parsed as UTC midnight, which in any timezone
- * behind UTC is still the 16th locally - so rendering it shows the wrong day.
- * Constructing from the parts gives local midnight instead.
- */
-export function parseDueDate(dateStr: string): Date {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  return new Date(year, month - 1, day)
-}
 
 /**
  * Whole days between today and a due date, both on the user's local calendar.

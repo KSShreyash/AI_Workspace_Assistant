@@ -186,3 +186,28 @@ async def test_empty_account_returns_zeroes_not_an_error(pool, test_auth_user):
     assert body["tasks"]["this_week"] == 0
     assert body["important_people"] == 0
     assert len(body["daily"]) == 7
+
+
+@pytest.mark.asyncio
+async def test_upcoming_tasks_come_from_the_server_nearest_first(pool, test_auth_user):
+    """The dashboard preview must not require downloading every task to sort them."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute(
+        """
+        insert into public.action_items
+            (user_id, text, direction, status, due_date, source_type, source_id)
+        values ($1, 'later',   'mine', 'open', current_date + 9, 'email', gen_random_uuid()),
+               ($1, 'soonest', 'mine', 'open', current_date + 1, 'email', gen_random_uuid()),
+               ($1, 'middle',  'mine', 'open', current_date + 4, 'email', gen_random_uuid()),
+               ($1, 'done',    'mine', 'done', current_date + 2, 'email', gen_random_uuid()),
+               ($1, 'undated', 'mine', 'open', null,             'email', gen_random_uuid())
+        """,
+        user_id,
+    )
+
+    async with await _client_for(user_id, email) as client:
+        body = (await client.get("/api/dashboard/stats")).json()
+
+    texts = [item["text"] for item in body["upcoming"]]
+    assert texts == ["soonest", "middle", "later"]

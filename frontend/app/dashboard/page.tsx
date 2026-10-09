@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ListChecks, ListPlus, UserRound, Users } from 'lucide-react'
+import { CalendarDays, ListChecks, ListPlus, Mail, TrendingDown, TrendingUp, UserRound, Users } from 'lucide-react'
 
 import { apiFetch } from '@/lib/api'
+import { parseDueDate } from '@/lib/parseDueDate'
 import { Button } from '@/app/components/ui/Button'
 import { Card } from '@/app/components/ui/Card'
 import { TasksRemainingBar } from '@/app/components/TasksRemainingBar'
+import { ActivityChart, type ActivityPoint } from '@/app/components/charts/ActivityChart'
+import { CategoryDonut, type Categories } from '@/app/components/charts/CategoryDonut'
 
 type GraphStatus =
   | { state: 'loading' }
@@ -25,12 +28,99 @@ type DashboardData = {
   activity: ActivityEntry[]
 }
 
-type ActionItemSummary = {
+type WeekCounts = { this_week: number; previous_week: number }
+
+type UpcomingTask = {
   id: string
   text: string
-  status: 'open' | 'done'
-  due_date: string | null
-  contact: { id: string; display_name: string | null; email_address: string | null } | null
+  due_date: string
+  category: string
+  contact: string | null
+}
+
+type Stats = {
+  emails: WeekCounts
+  tasks: WeekCounts
+  meetings: WeekCounts
+  categories: Categories
+  important_people: number
+  daily: ActivityPoint[]
+  upcoming: UpcomingTask[]
+}
+
+/**
+ * Accept the payload only if it carries what the tiles and charts read.
+ *
+ * Without this, a partial or unexpected response reached the render and threw
+ * on the first missing field, taking the whole dashboard down - including the
+ * connection status and activity feed, which do not depend on it at all.
+ */
+function isStats(value: unknown): value is Stats {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  const week = (w: unknown) =>
+    typeof w === 'object' && w !== null && typeof (w as WeekCounts).this_week === 'number'
+  return (
+    week(v.emails) &&
+    week(v.tasks) &&
+    week(v.meetings) &&
+    typeof v.important_people === 'number' &&
+    typeof v.categories === 'object' &&
+    v.categories !== null &&
+    Array.isArray(v.daily) &&
+    Array.isArray(v.upcoming)
+  )
+}
+
+/** Percentage change, or null when last week had nothing to compare against. */
+function weekDelta(counts: WeekCounts): number | null {
+  if (counts.previous_week === 0) return null
+  return Math.round(((counts.this_week - counts.previous_week) / counts.previous_week) * 100)
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+  delta,
+}: {
+  icon: typeof Mail
+  label: string
+  value: number
+  delta?: number | null
+}) {
+  return (
+    <Card className="flex items-center gap-4">
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
+        <Icon size={20} aria-hidden="true" />
+      </span>
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          <p
+            className="text-2xl font-bold text-[var(--color-fg)]"
+            style={{ fontVariantNumeric: 'tabular-nums' }}
+          >
+            {value}
+          </p>
+          {delta !== null && delta !== undefined && (
+            <span
+              className={`flex items-center gap-0.5 text-xs font-medium ${
+                delta >= 0 ? 'text-[var(--color-accent)]' : 'text-[var(--color-danger)]'
+              }`}
+            >
+              {delta >= 0 ? (
+                <TrendingUp size={12} aria-hidden="true" />
+              ) : (
+                <TrendingDown size={12} aria-hidden="true" />
+              )}
+              {Math.abs(delta)}%
+            </span>
+          )}
+        </div>
+        <p className="mt-1 truncate text-sm text-[var(--color-muted)]">{label}</p>
+      </div>
+    </Card>
+  )
 }
 
 export default function DashboardPage() {
@@ -79,23 +169,18 @@ export default function DashboardPage() {
     }
   }, [])
 
-  const [taskTotals, setTaskTotals] = useState<{ open: number; total: number } | null>(null)
-  const [upcomingTasks, setUpcomingTasks] = useState<ActionItemSummary[] | null>(null)
+  const [stats, setStats] = useState<Stats | null>(null)
 
-  const loadTaskTotals = useCallback(async () => {
+  const loadStats = useCallback(async () => {
     try {
-      const response = await apiFetch('/api/action-items?include_done=true')
+      const response = await apiFetch('/api/dashboard/stats')
       if (!response.ok) return
-      const items: ActionItemSummary[] = await response.json()
-      const open = items.filter((item) => item.status === 'open').length
-      setTaskTotals({ open, total: items.length })
-      const upcoming = items
-        .filter((item): item is ActionItemSummary & { due_date: string } => item.status === 'open' && item.due_date !== null)
-        .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
-        .slice(0, 5)
-      setUpcomingTasks(upcoming)
+      const body = await response.json()
+      if (isStats(body)) setStats(body)
     } catch {
-      // Non-fatal: leaves the gauge and upcoming-tasks sections blank, same treatment as loadDashboard's fetch failure.
+      // Non-fatal: the connection status already surfaces a page-level error if
+      // the backend is unreachable. A stats failure alone leaves the tiles and
+      // charts out rather than blocking the page.
     }
   }, [])
 
@@ -104,9 +189,9 @@ export default function DashboardPage() {
     // call as a synchronous setState in an effect, which it is not - each is
     // async and every setState happens after an await.
     void (async () => {
-      await Promise.all([loadStatus(), loadDashboard(), loadTaskTotals()])
+      await Promise.all([loadStatus(), loadDashboard(), loadStats()])
     })()
-  }, [loadStatus, loadDashboard, loadTaskTotals])
+  }, [loadStatus, loadDashboard, loadStats])
 
   async function runTrigger(kind: 'sync' | 'extract') {
     setPending(kind)
@@ -182,31 +267,53 @@ export default function DashboardPage() {
 
       {dashboard && (
         <>
-          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Card className="flex items-center gap-4">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
-                <Users size={20} aria-hidden="true" />
-              </span>
-              <div>
-                <p className="text-2xl font-bold text-[var(--color-fg)]">{dashboard.contact_count}</p>
-                <p className="mt-1 text-sm text-[var(--color-muted)]">Contacts</p>
-              </div>
-            </Card>
-            <Card className="flex items-center gap-4">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
-                <ListChecks size={20} aria-hidden="true" />
-              </span>
-              <div>
-                <p className="text-2xl font-bold text-[var(--color-fg)]">{dashboard.open_action_item_count}</p>
-                <p className="mt-1 text-sm text-[var(--color-muted)]">Open action items</p>
-              </div>
-            </Card>
-          </div>
+          {stats && (
+            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatTile
+                icon={Mail}
+                label="Emails this week"
+                value={stats.emails.this_week}
+                delta={weekDelta(stats.emails)}
+              />
+              <StatTile
+                icon={ListChecks}
+                label="Tasks extracted"
+                value={stats.tasks.this_week}
+                delta={weekDelta(stats.tasks)}
+              />
+              <StatTile
+                icon={CalendarDays}
+                label="Meetings"
+                value={stats.meetings.this_week}
+                delta={weekDelta(stats.meetings)}
+              />
+              <StatTile
+                icon={Users}
+                label="People you owe work"
+                value={stats.important_people}
+              />
+            </div>
+          )}
 
-          {taskTotals && (
-            <Card className="mt-6 flex items-center justify-center p-8">
-              <TasksRemainingBar open={taskTotals.open} total={taskTotals.total} />
-            </Card>
+          <Card className="mt-6 flex items-center justify-center p-8">
+            <TasksRemainingBar
+              open={dashboard.open_action_item_count}
+              total={dashboard.contact_count + dashboard.open_action_item_count}
+            />
+          </Card>
+
+          {stats && (
+            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-5">
+              <Card className="lg:col-span-3">
+                <h2 className="text-sm font-semibold text-[var(--color-fg)]">Email to task flow</h2>
+                <p className="mt-0.5 mb-3 text-xs text-[var(--color-muted)]">Last 7 days</p>
+                <ActivityChart data={stats.daily} />
+              </Card>
+              <Card className="lg:col-span-2">
+                <h2 className="mb-4 text-sm font-semibold text-[var(--color-fg)]">Task categories</h2>
+                <CategoryDonut categories={stats.categories} />
+              </Card>
+            </div>
           )}
 
           <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -240,18 +347,25 @@ export default function DashboardPage() {
               )}
             </Card>
 
-            {upcomingTasks && (
+            {stats && (
               <Card>
                 <h2 className="text-sm font-semibold text-[var(--color-fg)]">Upcoming tasks</h2>
-                {upcomingTasks.length === 0 ? (
+                {stats.upcoming.length === 0 ? (
                   <p className="mt-2 text-sm text-[var(--color-muted)]">No upcoming tasks.</p>
                 ) : (
                   <ul className="mt-4 space-y-4">
-                    {upcomingTasks.map((item) => (
+                    {stats.upcoming.map((item) => (
                       <li key={item.id} className="flex items-center justify-between gap-3 text-sm">
-                        <p className="min-w-0 truncate text-[var(--color-fg)]">{item.text}</p>
+                        <div className="min-w-0">
+                          <p className="truncate text-[var(--color-fg)]">{item.text}</p>
+                          {item.contact && (
+                            <p className="mt-0.5 truncate text-xs text-[var(--color-muted)]">
+                              From: {item.contact}
+                            </p>
+                          )}
+                        </div>
                         <span className="shrink-0 text-xs text-[var(--color-muted)]">
-                          {new Date(item.due_date + 'T00:00:00Z').toLocaleDateString(undefined, {
+                          {parseDueDate(item.due_date).toLocaleDateString(undefined, {
                             month: 'short',
                             day: 'numeric',
                           })}
