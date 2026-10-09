@@ -16,6 +16,7 @@ from app.services.gmail_client import HistoryExpired
 from app.services.ai_extraction import extract_user
 from app.repositories.connected_accounts import ConnectedAccountsRepository
 from app.services.account_tokens import get_valid_access_token, refresh_and_persist
+from app.services.sync_lock import user_sync_lock
 
 logger = logging.getLogger(__name__)
 
@@ -328,10 +329,10 @@ async def sync_chat(
     await sync_state.upsert(account_id, "chat", None, "ok")
 
 
-async def sync_account(
+async def _sync_account_unlocked(
     pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID
 ) -> None:
-    """Sync one connected mailbox.
+    """Sync one connected mailbox. Assumes the caller holds the user's lock.
 
     Calendar and chat run only for the primary account: a user's main calendar
     is a single thing, and Teams chat has no equivalent on a secondary Gmail
@@ -372,6 +373,11 @@ async def sync_account(
         except Exception as exc:
             errors.append(exc)
 
+    if errors:
+        raise errors[0]
+
+
+async def _extract_quietly(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
     try:
         await extract_user(pool, user_id, settings.extraction_batch_limit)
     except Exception:
@@ -381,30 +387,62 @@ async def sync_account(
         # produce no signal at all.
         logger.exception("Extraction failed after sync for user %s", user_id)
 
-    if errors:
-        raise errors[0]
+
+async def sync_account(
+    pool: asyncpg.Pool, user_id: uuid.UUID, account_id: uuid.UUID
+) -> bool:
+    """Sync one mailbox, under this user's sync lock.
+
+    Returns False if a sync for this user was already running. The cron drives
+    this directly, so locking only sync_user would leave the cron free to
+    overlap a user pressing "Sync now".
+    """
+    async with user_sync_lock(pool, user_id) as acquired:
+        if not acquired:
+            return False
+        try:
+            await _sync_account_unlocked(pool, user_id, account_id)
+        finally:
+            # Inside the lock, and in a finally: messages that were fetched
+            # before the failure are still worth extracting from.
+            await _extract_quietly(pool, user_id)
+        return True
 
 
-async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> None:
-    """Sync every mailbox this user has connected.
+async def sync_user(pool: asyncpg.Pool, user_id: uuid.UUID) -> bool:
+    """Sync every mailbox this user has connected, under one lock.
 
     One failing account does not stop the others - a user with a working
     Outlook and an expired Gmail should still get their Outlook synced - but
     the first error is re-raised afterwards so the caller can count the failure.
+
+    Returns False if a sync for this user was already running. The lock is taken
+    here rather than per account: taking it again inside the loop would try to
+    acquire it on a second pool connection, which is a different session, and
+    would starve itself.
     """
-    accounts = await ConnectedAccountsRepository(pool).list_for_user(user_id)
+    async with user_sync_lock(pool, user_id) as acquired:
+        if not acquired:
+            return False
 
-    errors: list[Exception] = []
-    for account in accounts:
-        if account["connection_status"] != "connected":
-            continue
-        try:
-            await sync_account(pool, user_id, account["id"])
-        except Exception as exc:
-            logger.exception(
-                "Sync failed for %s account %s", account["provider"], account["id"]
-            )
-            errors.append(exc)
+        accounts = await ConnectedAccountsRepository(pool).list_for_user(user_id)
 
-    if errors:
-        raise errors[0]
+        errors: list[Exception] = []
+        for account in accounts:
+            if account["connection_status"] != "connected":
+                continue
+            try:
+                await _sync_account_unlocked(pool, user_id, account["id"])
+            except Exception as exc:
+                logger.exception(
+                    "Sync failed for %s account %s", account["provider"], account["id"]
+                )
+                errors.append(exc)
+
+        # Once per user, not once per mailbox: extraction reads the user's whole
+        # pending queue regardless of which account a row came from.
+        await _extract_quietly(pool, user_id)
+
+        if errors:
+            raise errors[0]
+        return True

@@ -103,6 +103,9 @@ async def test_run_bulk_syncs_every_connected_account(pool, test_auth_user, test
         seen.append(account_id)
         if account_id == mine_a:
             raise RuntimeError("boom")
+        # True means "I did the work"; False would mean another sync held the
+        # user's lock, which the endpoint counts separately from a failure.
+        return True
 
     with patch("app.api.v1.sync.sync_account", side_effect=fake_sync_account):
         transport = ASGITransport(app=app)
@@ -147,6 +150,7 @@ async def test_run_bulk_skips_accounts_that_need_reconnecting(pool, test_auth_us
 
     async def fake_sync_account(pool_arg, uid, account_id):
         seen.append(account_id)
+        return True
 
     with patch("app.api.v1.sync.sync_account", side_effect=fake_sync_account):
         transport = ASGITransport(app=app)

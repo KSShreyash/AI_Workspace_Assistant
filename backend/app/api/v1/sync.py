@@ -17,8 +17,10 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 @router.post("/run/me")
 async def run_my_sync(current_user: CurrentUser = Depends(get_current_user)):
     pool = await get_pool()
-    await sync_user(pool, current_user.user_id)
-    return {"status": "ok"}
+    # Pressing "Sync now" while the cron is mid-run should say so rather than
+    # silently reporting success for work it did not do.
+    ran = await sync_user(pool, current_user.user_id)
+    return {"status": "ok" if ran else "already_running"}
 
 
 @router.post("/run")
@@ -34,10 +36,14 @@ async def run_bulk_sync(x_sync_secret: str | None = Header(default=None)):
 
     synced = 0
     failed = 0
+    skipped = 0
     for account in accounts:
         try:
-            await sync_account(pool, account["user_id"], account["id"])
-            synced += 1
+            if await sync_account(pool, account["user_id"], account["id"]):
+                synced += 1
+            else:
+                # Another sync for this user holds the lock. Not a failure.
+                skipped += 1
         except Exception:
             failed += 1
             # The caller is a cron using `curl -sf`, which discards the body and
@@ -51,6 +57,8 @@ async def run_bulk_sync(x_sync_secret: str | None = Header(default=None)):
             )
 
     if failed:
-        logger.warning("Bulk sync finished: %s synced, %s failed", synced, failed)
+        logger.warning(
+            "Bulk sync finished: %s synced, %s failed, %s skipped", synced, failed, skipped
+        )
 
-    return {"synced": synced, "failed": failed}
+    return {"synced": synced, "failed": failed, "skipped": skipped}
