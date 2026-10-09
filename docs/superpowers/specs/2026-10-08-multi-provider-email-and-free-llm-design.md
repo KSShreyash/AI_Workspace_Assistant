@@ -1,9 +1,9 @@
 # Multi-Provider Email + Free LLM — Design
 
 **Date:** 2026-10-08
-**Status:** Jobs 0 (local), 1, 3a, 4a-4e, 4g complete. Job 2 in progress - the
-Gmail half is done; Google Calendar, the link-account flow and the Settings UI
-remain. See the progress table in §0 before starting anything.
+**Status:** Every job complete except the cloud deploy, which needs accounts
+only you can create (§11.4). 381 backend tests and 186 frontend tests pass.
+See the progress table in §0 before starting anything.
 **Baseline commit:** `7fe7f1a`
 
 ---
@@ -32,7 +32,7 @@ remain. See the progress table in §0 before starting anything.
 | Job 4c | `/api/dashboard/stats` aggregates | **done** |
 | Job 4d | stat tiles, activity chart, category donut | **done** - palette validated |
 | Job 4e | static hero | **done** - static was chosen over parallax (§10) |
-| Job 4f | Emails page | **not started** - needs the rest of job 2 |
+| Job 4f | `/api/emails` + Emails page | **done** - 12 backend, 15 frontend tests |
 | Job 4g | Insights + Calendar | **done** - both in scope per §10 |
 | Job 2 | §6.1 `connected_accounts` replaces `ms_graph_tokens` | **done** |
 | Job 2 | §6.2 `account_id` on synced rows, `graph_*` to `provider_*` | **done** - chain replays clean from empty |
@@ -40,18 +40,39 @@ remain. See the progress table in §0 before starting anything.
 | Job 2 | §6.4 `sync_gmail` + provider dispatch for sync and refresh | **done** - 16 tests |
 | Job 2 | §6.5 advisory lock, one sync per user | **done** - 8 tests |
 | Job 3 | provider classification reaches the filter | **done** - the §5.5 tier-2 rule was dead code |
-| Job 2 | §6.4 Google Calendar + union free/busy | **not started** |
-| Job 2 | §6.3 `linkIdentity` flow, provider-aware `/api/auth/accounts` | **not started** |
-| Job 2 | multi-account Settings UI | **not started** |
+| Job 2 | §6.4 Google Calendar + union free/busy | **done** - 25 tests |
+| Job 2 | §6.3 `linkIdentity` flow, provider-aware callback | **done** - 23 tests |
+| Job 2 | multi-account Settings UI, disconnect, set-primary | **done** - 12 backend, 18 frontend tests |
+| Job 2 | Google sign-in, not only Microsoft | **done** |
 
 Local stack: `docker start supabase_db_AI_Workspace_Assistant`, then
-`cd backend && .venv/Scripts/python.exe -m pytest -q` - **332 tests pass**.
+`cd backend && .venv/Scripts/python.exe -m pytest -q` - **381 tests pass**.
+Frontend: `cd frontend && npx vitest run` - **186 tests pass**.
 Only the database container runs; see the note in §11.3 about Auth not starting.
 
-Migrations now number 14 (through `20261009000004_emails_classification.sql`).
+Migrations number 15 (through `20261009000004_emails_classification.sql`).
 `npx supabase db reset --local` replays the whole chain from empty, which is
 worth re-running after any migration change - it is the only check that a fresh
 deploy will work.
+
+### Deliberately not built
+
+Named here so nobody mistakes them for oversights.
+
+- **Multi-calendar within one Google account.** The primary Google calendar is
+  synced per account; a user's extra calendars ("Family", "Holidays") are not.
+  `sync_state` is keyed `(account_id, resource_type)` and `resource_type` is
+  free text, so `calendar:<id>` would extend it without a schema change.
+- **Booking onto a Google calendar.** Availability reads every connected
+  calendar, but `scheduling.py` still creates events through Graph only, so
+  follow-ups land on the Microsoft primary.
+- **Metadata-first Gmail fetching.** §6.4 suggested `format=metadata` for the
+  filter pass and `format=full` only for survivors. Bodies are fetched for
+  everything instead: the filter's body-length rule needs the body, and Gmail's
+  quota is nowhere near binding (the LLM token budget is, and the classification
+  fix below is what actually addresses that).
+- **All-day events are treated as UTC midnight** on both providers, so an
+  all-day event can block the wrong slice of a day in a non-UTC timezone.
 
 ### Bugs found and fixed while implementing job 2
 
@@ -77,6 +98,21 @@ worth knowing about if any of this is revisited.
 6. **The §5.5 tier-2 filter rule was unreachable.** Nothing stored a provider
    classification and `extract_user` never passed one, so every promotional mail
    still cost a full LLM call - on a free tier, the limit that binds first.
+7. **The OAuth callback picked the first azure-or-google identity.** Correct on a
+   first sign-in, wrong the moment there are two: identity order says nothing
+   about which one issued `provider_token`. Linking Gmail to an existing
+   Microsoft account would have overwritten the Microsoft mailbox's tokens with
+   Google ones and never stored the new mailbox. The provider is now carried on
+   the redirect URL by whoever started the flow.
+8. **Login offered Microsoft only**, which locked out anyone whose mail lives in
+   Gmail - they could not reach the product at all, making the rest of job 2
+   unreachable for exactly the users it was built for.
+9. **Deleting the primary mailbox left the user with none**, silently disabling
+   calendar and chat with nothing in the UI to explain it. Promotion also has to
+   prefer Outlook over Gmail, since both features are Graph-only.
+10. **Nothing stopped two syncs overlapping** (cron, sign-in task, "Sync now"),
+    and extraction has no locking, so both could read the same un-extracted rows
+    and spend the token budget on them twice.
 
 
 This document is the durable handoff. It is committed to git, so it is readable from
