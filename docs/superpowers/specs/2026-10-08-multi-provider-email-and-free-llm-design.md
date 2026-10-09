@@ -21,7 +21,7 @@ See the progress table in §0 before starting anything.
 | Job 1 | §5.3 Pydantic validation + `action_items.category` | **done** |
 | Job 1 | §5.5 pre-filter bulk mail and trivial chat | **done** |
 | Job 1 | §5.6 body truncation | **done** - ~3,900 to ~700 tokens on a long thread |
-| Job 1 | §5.6 batching several messages per call | **not started** |
+| Job 1 | §5.6 batching several messages per call | **deferred - see §5.6b** |
 | Job 1 | §8.2/3 notes `coalesce`, §8.4/10 logging, §8.6/18 prompt fencing | **done** |
 | Job 3a | indexes + correlated-subquery rewrite | **done** - 572ms to 4.05ms, loops=1000 to 1 |
 | Job 3a | four try/catch handlers, timezone bucketing | **done** |
@@ -417,6 +417,28 @@ So: one network call per batch, one transaction per message. A malformed entry f
 On a whole-call failure (429, timeout, unparseable response), fall back to
 single-message calls for that batch so one pathological message cannot block the other
 four — then the normal attempt-counter path retires it.
+
+### 5.6b Batching: deferred, with the numbers
+
+The spec committed to batching when a message cost ~3,900 tokens. The filter
+(§5.5) and truncation (§5.6) have since changed the arithmetic:
+
+```
+per message now   ~971 tokens      ~185 messages/day
+with the filter   covers ~616 raw messages/day
+real need         3 mailboxes x 20-50/day = 60-150 raw messages/day
+batching 5/call   31% saving -> ~272/day
+```
+
+That is already **4-10x headroom** over real need. Batching would buy capacity
+that is not short, in exchange for: a per-message transaction boundary inside a
+batched call (§5.6), a fallback path when one batch fails, a schema change to map
+results back to inputs, and the quality risk of putting five unrelated messages in
+one prompt and asking for per-message attribution.
+
+Deferred on YAGNI grounds. Revisit if real usage shows the daily budget actually
+binding - the quota table (§5.4) now records exactly that, so there will be
+evidence rather than a guess.
 
 ### 5.7 Testing (job 1)
 
