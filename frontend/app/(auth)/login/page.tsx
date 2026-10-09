@@ -4,7 +4,11 @@ import { CalendarClock, ListChecks, Mail, Sparkles } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 import { createClient } from '@/lib/supabase/client'
-import { OAUTH_SCOPES } from '@/lib/graph-scopes'
+import {
+  GOOGLE_OAUTH_QUERY_PARAMS,
+  GOOGLE_RESOURCE_SCOPES,
+  OAUTH_SCOPES,
+} from '@/lib/graph-scopes'
 import { Button } from '@/app/components/ui/Button'
 import { Card } from '@/app/components/ui/Card'
 
@@ -22,13 +26,19 @@ const WORKFLOW = [
 ]
 
 export default function LoginPage() {
-  async function handleSignIn() {
+  async function handleSignIn(provider: 'azure' | 'google') {
     const supabase = createClient()
     await supabase.auth.signInWithOAuth({
-      provider: 'azure',
+      provider,
       options: {
-        scopes: OAUTH_SCOPES,
-        redirectTo: `${window.location.origin}/callback`,
+        scopes: provider === 'google' ? GOOGLE_RESOURCE_SCOPES.join(' ') : OAUTH_SCOPES,
+        // The provider is carried on the redirect so the callback knows which
+        // identity issued the token it is about to store, rather than guessing
+        // from a list whose order means nothing.
+        redirectTo: `${window.location.origin}/callback?provider=${provider}`,
+        // Google issues a refresh token only when both are sent. Without them
+        // the mailbox works for about an hour and then cannot be renewed.
+        ...(provider === 'google' ? { queryParams: GOOGLE_OAUTH_QUERY_PARAMS } : {}),
       },
     })
   }
@@ -68,9 +78,17 @@ export default function LoginPage() {
             ))}
           </ul>
 
-          <Button className="mt-10" onClick={handleSignIn}>
-            Sign in with Microsoft
-          </Button>
+          <div className="mt-10 flex flex-wrap gap-3">
+            <Button onClick={() => void handleSignIn('azure')}>
+              Sign in with Microsoft
+            </Button>
+            <Button onClick={() => void handleSignIn('google')}>
+              Sign in with Google
+            </Button>
+          </div>
+          <p className="mt-3 text-xs text-[var(--color-muted)]">
+            Either one works, and you can connect more mailboxes afterwards.
+          </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
