@@ -75,6 +75,9 @@ async def sync_mail(
                     ],
                     received_at=_parse_graph_datetime(item.get("receivedDateTime")),
                     body_text=(item.get("body") or {}).get("content"),
+                    # Graph returns this on messages by default, so honouring
+                    # it costs no extra request.
+                    classification=item.get("inferenceClassification"),
                 )
             if page["delta_link"]:
                 delta_link = page["delta_link"]
@@ -112,6 +115,7 @@ async def _upsert_gmail_messages(
             to_recipients=message["to_recipients"],
             received_at=message["received_at"],
             body_text=message["body"],
+            classification=message["inference_classification"],
         )
 
 

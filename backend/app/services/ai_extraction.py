@@ -195,7 +195,7 @@ async def _extract_pending_emails(
 ) -> int:
     table = "emails"
     rows = await pool.fetch(
-        "select id, from_address, subject, body_text from public.emails "
+        "select id, from_address, subject, body_text, classification from public.emails "
         "where user_id = $1 and extracted_at is null "
         "and extraction_attempts < $3 "
         "order by received_at asc nulls last limit $2",
@@ -208,7 +208,11 @@ async def _extract_pending_emails(
         try:
             body = _strip_html(row["body_text"])
             keep, reason = should_extract(
-                {"from_address": row["from_address"], "body": body}
+                {
+                    "from_address": row["from_address"],
+                    "body": body,
+                    "inference_classification": row["classification"],
+                }
             )
             if not keep:
                 # Filtered before the model, not after: the whole point is to
