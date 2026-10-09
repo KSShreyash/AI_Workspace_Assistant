@@ -106,6 +106,14 @@ class ConnectedAccountsRepository:
             user_id,
         )
 
+    async def has_provider(self, user_id: uuid.UUID, provider: str) -> bool:
+        return await self._pool.fetchval(
+            "select exists (select 1 from public.connected_accounts "
+            "where user_id = $1 and provider = $2)",
+            user_id,
+            provider,
+        )
+
     async def get_primary(self, user_id: uuid.UUID) -> asyncpg.Record | None:
         """The account calendar and Teams chat sync from."""
         return await self._pool.fetchrow(
@@ -147,12 +155,66 @@ class ConnectedAccountsRepository:
             access_token_expires_at,
         )
 
-    async def delete(self, user_id: uuid.UUID, account_id: uuid.UUID) -> None:
-        await self._pool.execute(
-            "delete from public.connected_accounts where id = $1 and user_id = $2",
-            account_id,
-            user_id,
-        )
+    async def set_primary(self, user_id: uuid.UUID, account_id: uuid.UUID) -> None:
+        """Move primary status to this account.
+
+        Two statements in one transaction because a partial unique index allows
+        only one primary per user: the old one has to stand down before the new
+        one stands up, and a failure between the two would leave the user with
+        none.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "update public.connected_accounts set is_primary = false, updated_at = now() "
+                    "where user_id = $1 and is_primary and id <> $2",
+                    user_id,
+                    account_id,
+                )
+                await conn.execute(
+                    "update public.connected_accounts set is_primary = true, updated_at = now() "
+                    "where id = $2 and user_id = $1",
+                    user_id,
+                    account_id,
+                )
+
+    async def delete(self, user_id: uuid.UUID, account_id: uuid.UUID) -> bool:
+        """Disconnect a mailbox. Returns whether there was one to disconnect.
+
+        Reassigns primary status in the same transaction when the removed
+        mailbox held it. Leaving a user with mailboxes but no primary silently
+        disables calendar and chat, with nothing in the UI to explain why - so
+        this is done here rather than at the call site, where it can be
+        forgotten.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                removed = await conn.fetchrow(
+                    "delete from public.connected_accounts where id = $1 and user_id = $2 "
+                    "returning is_primary",
+                    account_id,
+                    user_id,
+                )
+                if removed is None:
+                    return False
+
+                if removed["is_primary"]:
+                    # Microsoft first: calendar and Teams chat are Graph-only,
+                    # so promoting a Gmail mailbox over an available Outlook one
+                    # would leave both permanently unsynced.
+                    await conn.execute(
+                        """
+                        update public.connected_accounts set is_primary = true, updated_at = now()
+                        where id = (
+                            select id from public.connected_accounts
+                            where user_id = $1
+                            order by (provider = 'microsoft') desc, created_at asc
+                            limit 1
+                        )
+                        """,
+                        user_id,
+                    )
+                return True
 
     async def list_syncable(self) -> list[asyncpg.Record]:
         """Every account the bulk cron should sync, across all users.

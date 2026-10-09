@@ -1,7 +1,8 @@
 import logging
+import uuid
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.deps import CurrentUser, get_current_user
 from app.db.session import get_pool
@@ -34,6 +35,55 @@ async def list_accounts(current_user: CurrentUser = Depends(get_current_user)):
         }
         for account in accounts
     ]
+
+
+@router.delete("/accounts/{account_id}", status_code=204)
+async def disconnect_account(
+    account_id: uuid.UUID, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Disconnect a mailbox.
+
+    Its synced mail, events and sync cursor go with it - the foreign keys
+    cascade. Leaving them behind would show the user messages from an inbox they
+    just removed, with no way to refresh or delete them.
+    """
+    pool = await get_pool()
+    removed = await ConnectedAccountsRepository(pool).delete(
+        current_user.user_id, account_id
+    )
+    if not removed:
+        # Scoped by user_id, so another user's mailbox is indistinguishable from
+        # one that does not exist. That is the intent: 404 rather than 403 does
+        # not confirm that the id is real.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="account not found")
+
+
+@router.post("/accounts/{account_id}/primary", status_code=204)
+async def set_primary_account(
+    account_id: uuid.UUID, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Choose which mailbox calendar and Teams chat follow."""
+    pool = await get_pool()
+    accounts = ConnectedAccountsRepository(pool)
+
+    account = await accounts.get(current_user.user_id, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="account not found")
+
+    # Calendar and chat are Graph-only. Choosing a Gmail mailbox while an
+    # Outlook one is connected would leave both permanently unsynced, so it is
+    # refused rather than silently accepted. A user with only Google mailboxes
+    # is unaffected: primary means nothing for them, and refusing would just
+    # block a harmless choice.
+    if account["provider"] != "microsoft" and await accounts.has_provider(
+        current_user.user_id, "microsoft"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="calendar and chat require a Microsoft mailbox as primary",
+        )
+
+    await accounts.set_primary(current_user.user_id, account_id)
 
 
 @router.get("/graph-status")
