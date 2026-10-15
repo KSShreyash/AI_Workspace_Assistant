@@ -21,7 +21,7 @@ from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="AI Assistant API")
+app = FastAPI(title="AI Workspace Assistant API")
 
 app.add_middleware(
     CORSMiddleware,

@@ -57,14 +57,15 @@ export default function LoginPage() {
       <div className="mx-auto grid w-full max-w-6xl gap-16 md:grid-cols-2 md:items-center">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-            AI Relationship Intelligence
+            AI Workspace Assistant
           </p>
           <h1 className="mt-4 text-4xl font-extrabold leading-tight text-[var(--color-fg)] sm:text-5xl">
-            Stop Losing Relationships. Let AI Manage Every Conversation.
+            Stop Losing Track. Let AI Run Your Inbox.
           </h1>
           <p className="mt-6 max-w-md text-base text-[var(--color-muted)]">
-            AI Assistant reads your emails and meetings, extracts what you
-            committed to, and schedules the follow-up before it slips.
+            Connect your work and personal mailboxes. The assistant reads
+            your email and calendar, extracts what you committed to, and
+            schedules the follow-up before it slips.
           </p>
 
           <ul className="mt-8 space-y-4">

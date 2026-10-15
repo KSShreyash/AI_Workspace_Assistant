@@ -175,7 +175,7 @@ for the collisions to avoid, and §8 for the audit findings being fixed.
 
 ## 1. Context
 
-A personal relationship manager. It syncs a mailbox, calendar, and Teams chat from
+A personal workspace assistant. It syncs a mailbox, calendar, and Teams chat from
 Microsoft Graph, uses an LLM to extract contacts and action items from those messages,
 and can book follow-up meetings onto the user's calendar.
 
@@ -935,25 +935,30 @@ shows it.
 
 Plus one line in `README.md`.
 
-> ### Do **not** rename the infrastructure identifiers
+> ### Infrastructure identifiers — renamed 2026-10-14
 >
-> Three strings still carry the original `ai-relationship-manager`, and they are
-> **live infrastructure**, not branding:
+> Three strings carried the project's original name. They were left alone
+> while the old deployment was live, because renaming them requires a coordinated
+> change across Render, Cloudflare Pages and the workflow — and the cron swallowed
+> failures, so a half-done rename looked exactly like a working one.
 >
-> | File | String | Breaks if renamed |
-> |---|---|---|
-> | `render.yaml:3` | service `ai-relationship-manager-api` | changes the deployed hostname |
-> | `.github/workflows/graph-sync-cron.yml:14` | `ai-relationship-manager-api.onrender.com` | **the cron 404s silently** — it uses `curl -sf` (§8.4/10) |
-> | `render.yaml:25` | CORS origin `ai-relationship-manager.pages.dev` | the Cloudflare Pages project name; changing it blocks the frontend |
+> That constraint is gone: the old Supabase project was deleted and everything is
+> being redeployed from scratch, so there is no running service to break. All three
+> now read `ai-workspace-assistant`:
 >
-> These are invisible to users. Renaming them requires a coordinated change across
-> Render, Cloudflare Pages, and the workflow — and because the cron swallows failures,
-> a half-done rename looks exactly like a working one. If it is ever wanted, the order
-> is: create new service → update CORS origin **and** cron URL → verify a real sync
-> lands → delete the old. Not in scope for job 4.
+> | File | String |
+> |---|---|
+> | `render.yaml` | service `ai-workspace-assistant-api` |
+> | `.github/workflows/graph-sync-cron.yml` | `ai-workspace-assistant-api.onrender.com` |
+> | `render.yaml` | CORS origin `ai-workspace-assistant.pages.dev` |
 >
-> The GitHub repo name (`AI-Relationship-Manager`) is likewise cosmetic; GitHub
-> redirects old remote URLs, so renaming it is safe but unnecessary.
+> **These must match the names you actually create.** The Render service name decides
+> the hostname the cron calls, and the Pages project name decides the origin CORS
+> allows. The cron now uses `--fail-with-body` rather than `-sf`, so a mismatch shows
+> the response instead of a bare non-zero exit.
+>
+> The GitHub repo name is cosmetic; GitHub redirects old remote URLs, so renaming it
+> is safe but optional.
 
 **Sidebar fit.** "AI Workspace Assistant" is considerably longer than "Candoor". The
 collapsed rail (72 px) already hides the wordmark entirely

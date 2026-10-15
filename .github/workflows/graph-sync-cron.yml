@@ -11,5 +11,5 @@ jobs:
     steps:
       - name: Call sync endpoint
         run: |
-          curl -sf -X POST "https://ai-relationship-manager-api.onrender.com/api/sync/run" \
+          curl -sf -X POST "https://ai-workspace-assistant-api.onrender.com/api/sync/run" \
             -H "X-Sync-Secret: ${{ secrets.SYNC_SECRET }}"

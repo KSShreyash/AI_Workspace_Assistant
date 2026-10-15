@@ -1,6 +1,6 @@
-# AI Assistant
+# AI Workspace Assistant
 
-An AI assistant for your Microsoft 365 account. It reads your Outlook mail, Calendar and Teams chats, works out **who you deal with**, **what you owe them (or they owe you)**, and **when you should meet next** — using an LLM to turn raw messages into structured contacts and action items.
+A workspace assistant for your email and calendar. Connect as many Outlook and Gmail mailboxes as you like; it reads your mail, Calendar and Teams chats, works out **who you deal with**, **what you owe them (or they owe you)**, and **when you should meet next** — using an LLM to turn raw messages into structured contacts and action items.
 
 Sign in with Microsoft, and it does the rest: pulls your recent communications, extracts commitments, keeps a running summary of every person you talk to, and books follow-up meetings straight onto your calendar.
 
@@ -212,6 +212,45 @@ Every route needs a valid Supabase JWT unless noted.
 | `GET /health` | Liveness, no auth |
 
 Frontend routes: `/` (redirect), `/login`, `/callback`, `/dashboard`, `/contacts`, `/contacts/view?id=`, `/planner`, `/search`.
+
+## Two environments: local and deployed
+
+The project runs in two self-consistent configurations, and they must never be
+mixed.
+
+| | Database + Auth | Backend | Frontend |
+|---|---|---|---|
+| **Local** | Supabase CLI on Docker | `uvicorn` on `:8000` | `next dev` on `:3000` |
+| **Deployed** | Supabase cloud project | Render | Cloudflare Pages |
+
+**Why they cannot be mixed.** `profiles.id` has a foreign key to
+`auth.users(id)`, so the application database and the Auth service have to be the
+same Supabase instance — a user id minted by cloud Auth violates the foreign key
+against a local `auth.users`. JWT verification follows `SUPABASE_URL` for the
+same reason. Switch `DATABASE_URL`, `SUPABASE_URL` and the service-role key
+together, or not at all.
+
+Templates for both are committed:
+
+```
+backend/.env.example          local values
+backend/.env.cloud.example    cloud values (set in the Render dashboard)
+frontend/.env.local.example   local values
+frontend/.env.cloud.example   cloud values (set in Cloudflare Pages)
+```
+
+Start the local stack with:
+
+```bash
+npm install
+npx supabase start --debug -x realtime,storage-api,imgproxy,mailpit,edge-runtime,logflare,vector,supavisor
+npx supabase db reset     # replays every migration from empty
+```
+
+Two things that waste an hour if missed: pass `--debug` on the first run, or the
+CLI buffers all output and looks hung while downloading; and one invalid name in
+`-x` silently voids the whole exclusion list (it is `postgres-meta`, not
+`pg-meta`).
 
 ## Running it locally
 

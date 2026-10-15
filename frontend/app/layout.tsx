@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Assistant",
+  title: "AI Workspace Assistant",
   description: "Stay on top of your contacts and follow-ups.",
 };
 

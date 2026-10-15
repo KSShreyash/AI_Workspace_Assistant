@@ -67,7 +67,7 @@ describe('LoginPage', () => {
     render(<LoginPage />)
 
     expect(
-      screen.getByRole('heading', { name: /stop losing relationships/i })
+      screen.getByRole('heading', { name: /stop losing track/i })
     ).toBeInTheDocument()
     expect(screen.getByText(/extracts action items from email & calendar/i)).toBeInTheDocument()
     expect(screen.getByText(/tracks who owes who what/i)).toBeInTheDocument()
