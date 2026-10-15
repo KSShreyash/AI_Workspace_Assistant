@@ -6,7 +6,12 @@ class Settings(BaseSettings):
 
     database_url: str
     supabase_url: str
-    supabase_service_role_key: str
+    # Declared but unused: the backend reaches Postgres directly over asyncpg
+    # and verifies JWTs against the published JWKS, so it never calls the
+    # Supabase REST or admin APIs. Kept optional rather than deleted so an
+    # existing .env carrying it still loads - but no deployment should be
+    # asked to supply the most dangerous key in the project for nothing.
+    supabase_service_role_key: str = ""
     fernet_key: str
     ms_client_id: str
     ms_client_secret: str

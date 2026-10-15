@@ -1,5 +1,9 @@
 # backend/.gitignore
-backend/.env
+# Every backend env file is a secret unless it is an example. The previous
+# rule named `backend/.env` exactly, so backend/.env.cloud would have been
+# committed with live keys in it.
+backend/.env*
+!backend/.env*.example
 backend/**/__pycache__/
 backend/**/.pytest_cache/
 backend/**/.venv/
