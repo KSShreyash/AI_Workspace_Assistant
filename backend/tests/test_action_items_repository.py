@@ -407,3 +407,102 @@ async def test_search_respects_limit(pool, test_auth_user):
     results = await action_items.search(user_id, "cappeditem", 20)
 
     assert len(results) == 20
+
+
+# --------------------------------------------------------------------------
+# Clearing completed work
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clearing_completed_removes_only_done_items(pool, test_auth_user):
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ActionItemsRepository(pool)
+
+    for text in ("still open", "also open"):
+        await repo.insert(
+            user_id=user_id, contact_id=None, text=text, direction="mine",
+            due_date=None, source_type="email", source_id=uuid.uuid4(),
+        )
+    for text in ("finished a", "finished b"):
+        await repo.insert(
+            user_id=user_id, contact_id=None, text=text, direction="mine",
+            due_date=None, source_type="email", source_id=uuid.uuid4(),
+        )
+    done = await pool.fetch(
+        "select id from public.action_items where user_id = $1 and text like 'finished%'", user_id
+    )
+    for row in done:
+        await repo.update_status(user_id, row["id"], "done")
+
+    removed = await repo.delete_completed(user_id)
+
+    assert removed == 2
+    remaining = await pool.fetch(
+        "select text, status from public.action_items where user_id = $1 order by text", user_id
+    )
+    assert [r["text"] for r in remaining] == ["also open", "still open"]
+
+
+@pytest.mark.asyncio
+async def test_clearing_completed_never_touches_another_user(pool, test_auth_user, test_auth_user_2):
+    user_id, email = test_auth_user
+    other_id, other_email = test_auth_user_2
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await ProfilesRepository(pool).upsert(other_id, other_email)
+    repo = ActionItemsRepository(pool)
+
+    for uid in (user_id, other_id):
+        await repo.insert(
+            user_id=uid, contact_id=None, text="done thing", direction="mine",
+            due_date=None, source_type="email", source_id=uuid.uuid4(),
+        )
+        row = await pool.fetchrow(
+            "select id from public.action_items where user_id = $1", uid
+        )
+        await repo.update_status(uid, row["id"], "done")
+
+    await repo.delete_completed(user_id)
+
+    assert await repo.count(user_id) == 0
+    assert await repo.count(other_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_clearing_completed_when_there_are_none_is_not_an_error(pool, test_auth_user):
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    assert await ActionItemsRepository(pool).delete_completed(user_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_scheduled_completed_item_leaves_the_meeting_alone(pool, test_auth_user):
+    """The calendar event is real and already in the user's calendar; removing
+    the task that produced it must not imply the meeting never happened.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ActionItemsRepository(pool)
+    calendar_events = CalendarEventsRepository(pool)
+
+    event_id = await calendar_events.upsert(
+        user_id=user_id,
+        account_id=await primary_account_id(pool, user_id),
+        provider_event_id="evt-kept", subject="Call Dana", organizer=None,
+        attendees=[], start_time=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
+        is_online_meeting=False, online_meeting_join_url=None, body_text=None,
+    )
+    await repo.insert(
+        user_id=user_id, contact_id=None, text="Call Dana", direction="mine",
+        due_date=None, source_type="email", source_id=uuid.uuid4(),
+    )
+    item = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
+    await repo.set_scheduled_calendar_event_id(user_id, item["id"], event_id)
+    await repo.update_status(user_id, item["id"], "done")
+
+    await repo.delete_completed(user_id)
+
+    assert await calendar_events.count(user_id) == 1

@@ -63,6 +63,25 @@ async def list_action_items(
     return [_serialize(row) for row in rows]
 
 
+@router.delete("/completed")
+async def clear_completed_action_items(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Remove this user's finished tasks.
+
+    Declared before /{item_id} on purpose: FastAPI matches routes in order, and
+    a later literal path would be shadowed by the parameterised one, which would
+    then try to parse "completed" as a uuid.
+
+    Permanent rather than archived - the task has served its purpose once done,
+    and an archive is just a longer list to ignore. Anything scheduled keeps its
+    calendar event.
+    """
+    pool = await get_pool()
+    removed = await ActionItemsRepository(pool).delete_completed(current_user.user_id)
+    return {"removed": removed}
+
+
 @router.patch("/{item_id}")
 async def update_action_item_status(
     item_id: uuid.UUID,

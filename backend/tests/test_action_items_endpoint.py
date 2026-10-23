@@ -288,3 +288,62 @@ async def test_list_action_items_includes_scheduled_fields(pool, test_auth_user)
         assert body[0]["scheduled_start_time"] == "2026-07-20T14:00:00+00:00"
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_clear_completed_reports_how_many_it_removed(pool, test_auth_user):
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    repo = ActionItemsRepository(pool)
+
+    await repo.insert(
+        user_id=user_id, contact_id=None, text="open one", direction="mine",
+        due_date=None, source_type="email", source_id=uuid.uuid4(),
+    )
+    await repo.insert(
+        user_id=user_id, contact_id=None, text="done one", direction="mine",
+        due_date=None, source_type="email", source_id=uuid.uuid4(),
+    )
+    done = await pool.fetchrow(
+        "select id from public.action_items where user_id = $1 and text = 'done one'", user_id
+    )
+    await repo.update_status(user_id, done["id"], "done")
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.delete("/api/action-items/completed")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 1}
+    assert await repo.count(user_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_completed_with_nothing_done_removes_nothing(pool, test_auth_user):
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.delete("/api/action-items/completed")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 0}
+
+
+@pytest.mark.asyncio
+async def test_clear_completed_requires_authentication(pool):
+    """It is a destructive route; an unauthenticated caller must not reach it."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete("/api/action-items/completed")
+
+    assert response.status_code == 401

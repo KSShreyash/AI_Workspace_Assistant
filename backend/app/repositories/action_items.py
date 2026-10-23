@@ -138,6 +138,21 @@ class ActionItemsRepository:
             status,
         )
 
+    async def delete_completed(self, user_id: uuid.UUID) -> int:
+        """Remove this user's finished tasks. Returns how many went.
+
+        Scoped by user_id as well as status so a bug here cannot reach across
+        accounts. Any calendar event a task was scheduled onto is deliberately
+        left in place: the meeting is real and already in the user's calendar,
+        and deleting the task that produced it should not imply otherwise.
+        """
+        result = await self._pool.execute(
+            "delete from public.action_items where user_id = $1 and status = 'done'",
+            user_id,
+        )
+        # asyncpg returns the command tag, e.g. "DELETE 3".
+        return int(result.split()[-1]) if result else 0
+
     async def count_open(self, user_id: uuid.UUID) -> int:
         return await self._pool.fetchval(
             "select count(*) from public.action_items where user_id = $1 and status = 'open'",

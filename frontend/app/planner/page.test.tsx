@@ -11,8 +11,8 @@ vi.mock('next/navigation', () => ({ useRouter: () => routerMock }))
 
 import PlannerPage from './page'
 
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), { status: 200 })
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status })
 }
 
 const TODAY = new Date('2026-07-17T12:00:00Z')
@@ -266,5 +266,86 @@ describe('PlannerPage accessibility', () => {
     // what it controls.
     render(<PlannerPage />)
     expect(await screen.findByRole('combobox', { name: /who/i })).toBeInTheDocument()
+  })
+})
+
+describe('clearing completed tasks', () => {
+  const WITH_DONE = [
+    {
+      id: 'a1', text: 'Still open', direction: 'mine', status: 'open',
+      due_date: null, contact: null, scheduled_calendar_event_id: null,
+      scheduled_start_time: null, created_at: '2026-07-01T09:00:00Z',
+      updated_at: '2026-07-01T09:00:00Z',
+    },
+    {
+      id: 'a2', text: 'Finished thing', direction: 'mine', status: 'done',
+      due_date: null, contact: null, scheduled_calendar_event_id: null,
+      scheduled_start_time: null, created_at: '2026-07-01T09:00:00Z',
+      updated_at: '2026-07-01T09:00:00Z',
+    },
+  ]
+
+  /** The default tab is Today; these items have no due date, so switch first. */
+  async function openCompletedTab() {
+    render(<PlannerPage />)
+    fireEvent.click(screen.getByRole('button', { name: /^completed/i }))
+    await screen.findByText('Finished thing')
+  }
+
+  beforeEach(() => {
+    apiFetchMock.mockReset()
+    apiFetchMock.mockResolvedValue(jsonResponse(WITH_DONE))
+  })
+
+  it('offers the control only on the Completed tab', async () => {
+    await openCompletedTab()
+    expect(screen.getByRole('button', { name: /clear completed/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^no date/i }))
+    expect(screen.queryByRole('button', { name: /clear completed/i })).not.toBeInTheDocument()
+  })
+
+  it('asks before deleting, because this cannot be undone', async () => {
+    await openCompletedTab()
+    fireEvent.click(screen.getByRole('button', { name: /clear completed/i }))
+
+    expect(screen.getByText(/permanently delete 1 completed task/i)).toBeInTheDocument()
+    // Only the initial load so far - nothing has been sent.
+    expect(apiFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes and reloads once confirmed', async () => {
+    await openCompletedTab()
+    fireEvent.click(screen.getByRole('button', { name: /clear completed/i }))
+
+    apiFetchMock.mockResolvedValueOnce(jsonResponse({ removed: 1 }))
+    apiFetchMock.mockResolvedValueOnce(jsonResponse([WITH_DONE[0]]))
+    fireEvent.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    await waitFor(() =>
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/action-items/completed',
+        expect.objectContaining({ method: 'DELETE' }),
+      ),
+    )
+  })
+
+  it('can be backed out of', async () => {
+    await openCompletedTab()
+    fireEvent.click(screen.getByRole('button', { name: /clear completed/i }))
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+
+    expect(screen.queryByText(/permanently delete/i)).not.toBeInTheDocument()
+    expect(apiFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a failure instead of pretending it worked', async () => {
+    await openCompletedTab()
+    fireEvent.click(screen.getByRole('button', { name: /clear completed/i }))
+
+    apiFetchMock.mockResolvedValueOnce(jsonResponse({ detail: 'boom' }, 500))
+    fireEvent.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    expect(await screen.findByText(/could not clear/i)).toBeInTheDocument()
   })
 })

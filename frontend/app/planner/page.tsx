@@ -74,6 +74,8 @@ export default function PlannerPage() {
   const [direction, setDirection] = useState<Direction>('all')
   const [activeTab, setActiveTab] = useState<TabKey>('today')
   const [toggleError, setToggleError] = useState<string | null>(null)
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +104,24 @@ export default function PlannerPage() {
       await load()
     })()
   }, [load])
+
+  async function clearCompleted() {
+    setToggleError(null)
+    setClearing(true)
+    try {
+      const response = await apiFetch('/api/action-items/completed', { method: 'DELETE' })
+      if (!response.ok) {
+        setToggleError('Could not clear completed tasks. Please try again.')
+        return
+      }
+      setConfirmingClear(false)
+      await load()
+    } catch {
+      setToggleError('Could not clear completed tasks. Please try again.')
+    } finally {
+      setClearing(false)
+    }
+  }
 
   async function toggleDone(item: ActionItem) {
     setToggleError(null)
@@ -225,7 +245,48 @@ export default function PlannerPage() {
           <option value="mine">Mine</option>
           <option value="theirs">Theirs</option>
         </select>
+
+        {/* Only on Completed: a destructive control has no business sitting
+            beside a list it would not touch. */}
+        {activeTab === 'completed' && buckets.completed.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setConfirmingClear(true)}
+            disabled={clearing}
+            className="text-sm font-medium text-[var(--color-danger)] hover:underline disabled:opacity-60"
+          >
+            Clear completed
+          </button>
+        )}
       </div>
+
+      {confirmingClear && (
+        <div className="mt-4 rounded-[var(--radius-card)] border border-[var(--color-danger-border)] bg-[var(--color-danger-surface)] p-4">
+          <p className="text-sm text-[var(--color-fg)]">
+            {`Permanently delete ${buckets.completed.length} completed ${
+              buckets.completed.length === 1 ? 'task' : 'tasks'
+            }? This cannot be undone. Any meetings they booked stay in your calendar.`}
+          </p>
+          <div className="mt-3 flex gap-3">
+            <button
+              type="button"
+              onClick={() => void clearCompleted()}
+              disabled={clearing}
+              className="text-sm font-medium text-[var(--color-danger)] hover:underline disabled:opacity-60"
+            >
+              {clearing ? 'Deleting…' : 'Yes, delete them'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingClear(false)}
+              disabled={clearing}
+              className="text-sm font-medium text-[var(--color-muted)] hover:underline"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {toggleError && <p role="alert" className="mt-3 text-sm text-[var(--color-danger)]">{toggleError}</p>}
 
