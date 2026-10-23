@@ -41,12 +41,16 @@ async def get_dashboard(current_user: CurrentUser = Depends(get_current_user)):
 
     contact_count = await contacts_repo.count(current_user.user_id)
     open_action_item_count = await action_items_repo.count_open(current_user.user_id)
+    # Open and total are both needed: the progress bar previously derived its
+    # denominator as contacts + open, which adds people to tasks.
+    action_item_count = await action_items_repo.count(current_user.user_id)
     recent_contacts = await contacts_repo.list_recent(current_user.user_id, _ACTIVITY_LIMIT)
     recent_action_items = await action_items_repo.list_recent(current_user.user_id, _ACTIVITY_LIMIT)
 
     return {
         "contact_count": contact_count,
         "open_action_item_count": open_action_item_count,
+        "action_item_count": action_item_count,
         "activity": _merge_activity(recent_contacts, recent_action_items, _ACTIVITY_LIMIT),
     }
 

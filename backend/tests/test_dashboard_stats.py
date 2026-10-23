@@ -5,11 +5,15 @@ current dashboard downloads every action item ever created just to count them,
 which does not survive real volume.
 """
 
+import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.core.deps import CurrentUser, get_current_user
 from app.main import app
+from app.repositories.action_items import ActionItemsRepository
+from app.repositories.contacts import ContactsRepository
 from app.repositories.profiles import ProfilesRepository
 
 
@@ -211,3 +215,49 @@ async def test_upcoming_tasks_come_from_the_server_nearest_first(pool, test_auth
 
     texts = [item["text"] for item in body["upcoming"]]
     assert texts == ["soonest", "middle", "later"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_reports_total_action_items_separately_from_open(pool, test_auth_user):
+    """The progress bar needs a real denominator.
+
+    It was computing total as contact_count + open_action_item_count - adding
+    people to tasks - so a user with 1 contact, 50 open and 3 done saw
+    "50 open of 51 total" instead of 53.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    contacts = ContactsRepository(pool)
+    items = ActionItemsRepository(pool)
+
+    # One contact, so the old formula's contribution is visible and wrong.
+    contact_id = await contacts.upsert_by_email(user_id, "dana@example.com", "Dana", None)
+
+    for n in range(5):
+        await items.insert(
+            user_id=user_id, contact_id=contact_id, text=f"open {n}", direction="mine",
+            due_date=None, source_type="email", source_id=uuid.uuid4(),
+        )
+    for n in range(2):
+        await items.insert(
+            user_id=user_id, contact_id=contact_id, text=f"done {n}", direction="mine",
+            due_date=None, source_type="email", source_id=uuid.uuid4(),
+        )
+    done_rows = await pool.fetch(
+        "select id from public.action_items where user_id = $1 and text like 'done%'", user_id
+    )
+    for row in done_rows:
+        await items.update_status(user_id, row["id"], "done")
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            body = (await client.get("/api/dashboard")).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["open_action_item_count"] == 5
+    assert body["action_item_count"] == 7
+    # The old formula would have produced 6 here, which is neither.
+    assert body["action_item_count"] != body["contact_count"] + body["open_action_item_count"]

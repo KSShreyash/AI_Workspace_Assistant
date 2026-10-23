@@ -26,6 +26,7 @@ type ActivityEntry =
 type DashboardData = {
   contact_count: number
   open_action_item_count: number
+  action_item_count: number
   activity: ActivityEntry[]
 }
 
@@ -307,7 +308,7 @@ export default function DashboardPage() {
           <Card className="mt-6 flex items-center justify-center p-8">
             <TasksRemainingBar
               open={dashboard.open_action_item_count}
-              total={dashboard.contact_count + dashboard.open_action_item_count}
+              total={dashboard.action_item_count}
             />
           </Card>
 
