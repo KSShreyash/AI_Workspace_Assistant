@@ -114,7 +114,7 @@ export default function NavBar() {
     <motion.nav
       animate={{ width: collapsed ? 72 : 224 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="flex shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg-alt)] px-3 py-6"
+      className="relative z-20 flex shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)] bg-[var(--color-bg-alt)] px-3 py-6"
     >
       <div className="mb-8 flex items-center justify-between px-1">
         {!collapsed && (

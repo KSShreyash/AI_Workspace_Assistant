@@ -45,7 +45,10 @@
   --color-danger-surface: #FBEEED;
   --color-warning: #A8680F;
 
-  --radius-card: 14px;
+  /* Two steps, not one value: a panel carries marginally more radius than the
+     controls inside it, which reads as a decision rather than a default. */
+  --radius-card: 6px;      /* panels, cards, dialogs */
+  --radius-control: 4px;   /* buttons, inputs - crisper than their container */
 
   /* Chart series. Deliberately NOT the UI accent: --color-accent measures 0.079
      chroma, below the 0.1 floor a categorical palette needs to stay readable as

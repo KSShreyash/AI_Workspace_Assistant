@@ -43,7 +43,7 @@ export function Button({
       whileHover={disabled ? undefined : { y: -1 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
       className={clsx(
-        'inline-flex items-center justify-center gap-2 rounded-[var(--radius-card)] px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:opacity-50 disabled:pointer-events-none',
+        'inline-flex items-center justify-center gap-2 rounded-[var(--radius-control)] px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] disabled:opacity-50 disabled:pointer-events-none',
         VARIANT_CLASSES[variant],
         className
       )}
