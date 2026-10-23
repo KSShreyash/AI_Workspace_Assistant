@@ -106,6 +106,24 @@ class ConnectedAccountsRepository:
             user_id,
         )
 
+    async def get_primary_for_provider(
+        self, user_id: uuid.UUID, provider: str
+    ) -> asyncpg.Record | None:
+        """The account to use when a feature only exists on one provider.
+
+        Prefers the primary mailbox when it matches, otherwise the oldest
+        connected one of that provider. Scheduling needs this: meetings are
+        created through Microsoft Graph, so a user whose primary is Gmail must
+        still be able to book onto their Outlook calendar.
+        """
+        return await self._pool.fetchrow(
+            "select * from public.connected_accounts "
+            "where user_id = $1 and provider = $2 and connection_status = 'connected' "
+            "order by is_primary desc, created_at asc limit 1",
+            user_id,
+            provider,
+        )
+
     async def has_provider(self, user_id: uuid.UUID, provider: str) -> bool:
         return await self._pool.fetchval(
             "select exists (select 1 from public.connected_accounts "

@@ -8,8 +8,8 @@ import httpx
 from app.repositories.action_items import ActionItemsRepository
 from app.repositories.calendar_events import CalendarEventsRepository
 from app.services import graph_client
+from app.repositories.connected_accounts import ConnectedAccountsRepository
 from app.services.account_tokens import (
-    get_primary_account,
     get_valid_access_token,
     refresh_and_persist,
 )
@@ -74,9 +74,17 @@ async def create_meeting(
     contact_email: str | None,
     contact_display_name: str | None,
 ) -> asyncpg.Record | None:
-    # Meetings go on the primary account's calendar - the one the user
-    # designated as their main one.
-    account = await get_primary_account(pool, user_id)
+    # Meetings are created through Microsoft Graph, so this needs a Microsoft
+    # mailbox specifically - not merely whichever account happens to be primary.
+    # Taking the primary regardless of provider sent a Google token to Graph for
+    # anyone whose only mailbox was Gmail: a 401, a wasted token refresh, then a
+    # second 401 surfacing as "please try again", which could never succeed.
+    #
+    # Booking onto Google Calendar is a known gap; until it exists, refusing
+    # clearly beats failing obscurely.
+    account = await ConnectedAccountsRepository(pool).get_primary_for_provider(
+        user_id, "microsoft"
+    )
     if account is None:
         return None
     access_token = await get_valid_access_token(pool, account)

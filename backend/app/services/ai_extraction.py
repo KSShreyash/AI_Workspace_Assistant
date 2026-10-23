@@ -96,18 +96,31 @@ async def _process_item(
     table = _TABLES[source_type]
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Whether a person exists is a fact from the message headers, not a
+            # model opinion. This used to iterate result["people"], so a model
+            # that returned an empty array - which small ones routinely do -
+            # created no contact even though the sender's address was right
+            # there, and any action item referring to them was stored with a
+            # null contact_id, which also makes it unschedulable.
+            #
+            # The model now only supplies notes; the participant list decides
+            # who exists.
+            notes_by_ref = {
+                person["ref"]: person.get("notes")
+                for person in result.get("people", [])
+                if person.get("ref")
+            }
+
             ref_to_contact_id: dict[str, uuid.UUID] = {}
-            for person in result.get("people", []):
-                match = next((p for p in resolved if p["ref"] == person["ref"]), None)
-                if match is None:
-                    continue
+            for match in resolved:
+                notes = notes_by_ref.get(match["ref"])
                 if match["email"]:
                     contact_id = await contacts.upsert_by_email(
-                        user_id, match["email"], match["name"], person["notes"], conn=conn
+                        user_id, match["email"], match["name"], notes, conn=conn
                     )
                 else:
                     contact_id = await contacts.upsert_by_display_name(
-                        user_id, match["name"], person["notes"], conn=conn
+                        user_id, match["name"], notes, conn=conn
                     )
                 ref_to_contact_id[match["ref"]] = contact_id
 

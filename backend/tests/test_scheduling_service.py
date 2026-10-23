@@ -184,3 +184,134 @@ async def test_create_meeting_retries_once_on_401(pool, test_auth_user):
 
     assert result["scheduled_calendar_event_id"] is not None
     assert route.call_count == 2
+
+
+# --------------------------------------------------------------------------
+# Meetings are created through Microsoft Graph, so they need a Microsoft account
+# --------------------------------------------------------------------------
+
+
+async def _google_only(pool, user_id):
+    await pool.execute("delete from public.connected_accounts where user_id = $1", user_id)
+    return await connect_account(
+        pool,
+        user_id=user_id,
+        provider="google",
+        provider_account_id="g-only",
+        email_address="person@gmail.com",
+        encrypted_access_token=encrypt_token("g-access"),
+        encrypted_refresh_token=encrypt_token("g-refresh"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=[],
+        is_primary=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_google_only_user_is_refused_rather_than_sent_to_microsoft(pool, test_auth_user):
+    """create_meeting took whichever account was primary and posted a Graph
+    payload with its token. For a Gmail-only user that is a Google token sent to
+    Microsoft: 401, then a wasted refresh, then 401 again, surfacing as
+    "Failed to create the meeting. Please try again" - advice that can never
+    work.
+    """
+    from app.services import scheduling
+
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await _google_only(pool, user_id)
+
+    with patch("app.services.scheduling.graph_client.create_calendar_event") as create:
+        result = await scheduling.create_meeting(
+            pool,
+            user_id,
+            uuid.uuid4(),
+            item_text="Call Dana",
+            start=datetime.now(timezone.utc) + timedelta(days=1),
+            end=datetime.now(timezone.utc) + timedelta(days=1, minutes=30),
+            online_meeting=True,
+            contact_email="dana@example.com",
+            contact_display_name="Dana",
+        )
+
+    create.assert_not_called()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_it_uses_the_microsoft_account_even_when_gmail_is_primary(pool, test_auth_user):
+    """Having a Gmail mailbox as primary must not disable scheduling when an
+    Outlook mailbox is also connected.
+    """
+    from app.services import scheduling
+
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await pool.execute("delete from public.connected_accounts where user_id = $1", user_id)
+    ms_id = await connect_account(
+        pool,
+        user_id=user_id,
+        provider="microsoft",
+        provider_account_id="ms-1",
+        email_address="work@example.com",
+        encrypted_access_token=encrypt_token("ms-access"),
+        encrypted_refresh_token=encrypt_token("ms-refresh"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=[],
+    )
+    await connect_account(
+        pool,
+        user_id=user_id,
+        provider="google",
+        provider_account_id="g-1",
+        email_address="person@gmail.com",
+        encrypted_access_token=encrypt_token("g-access"),
+        encrypted_refresh_token=encrypt_token("g-refresh"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=[],
+        is_primary=True,
+    )
+
+    contacts = ContactsRepository(pool)
+    contact_id = await contacts.upsert_by_email(user_id, "dana@example.com", "Dana", None)
+    items = ActionItemsRepository(pool)
+    await items.insert(
+        user_id=user_id, contact_id=contact_id, text="Call Dana", direction="mine",
+        due_date=None, source_type="email", source_id=uuid.uuid4(),
+    )
+    item = await pool.fetchrow("select id from public.action_items where user_id = $1", user_id)
+
+    graph_event = {
+        "id": "evt-new",
+        "subject": "Call Dana",
+        "organizer": {"emailAddress": {"address": "work@example.com"}},
+        "attendees": [],
+        "start": {"dateTime": "2026-07-20T14:00:00.0000000", "timeZone": "UTC"},
+        "end": {"dateTime": "2026-07-20T14:30:00.0000000", "timeZone": "UTC"},
+        "isOnlineMeeting": True,
+        "onlineMeeting": {"joinUrl": "https://teams.example/x"},
+    }
+
+    with patch(
+        "app.services.scheduling.graph_client.create_calendar_event",
+        return_value=graph_event,
+    ) as create:
+        updated = await scheduling.create_meeting(
+            pool,
+            user_id,
+            item["id"],
+            item_text="Call Dana",
+            start=datetime(2026, 7, 20, 14, 0, tzinfo=timezone.utc),
+            end=datetime(2026, 7, 20, 14, 30, tzinfo=timezone.utc),
+            online_meeting=True,
+            contact_email="dana@example.com",
+            contact_display_name="Dana",
+        )
+
+    create.assert_called_once()
+    assert updated is not None
+    # The event must be filed under the Microsoft mailbox that actually hosts it.
+    owner = await pool.fetchval(
+        "select account_id from public.calendar_events where provider_event_id = $1", "evt-new"
+    )
+    assert owner == ms_id

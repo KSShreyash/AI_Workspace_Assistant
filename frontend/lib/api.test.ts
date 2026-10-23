@@ -41,4 +41,18 @@ describe('apiFetch', () => {
 
     expect(apiBaseUrl()).toBe('https://api.example.com')
   })
+
+  it('names the missing variable rather than throwing on undefined', () => {
+    // NEXT_PUBLIC_* values are inlined at build time, so an unset one is a
+    // misconfigured deploy. The non-null assertion this replaces produced
+    // "Cannot read properties of undefined (reading 'trim')" on every request,
+    // naming neither the variable nor the cause.
+    const saved = process.env.NEXT_PUBLIC_API_BASE_URL
+    delete process.env.NEXT_PUBLIC_API_BASE_URL
+    try {
+      expect(() => apiBaseUrl()).toThrowError(/NEXT_PUBLIC_API_BASE_URL/)
+    } finally {
+      process.env.NEXT_PUBLIC_API_BASE_URL = saved
+    }
+  })
 })

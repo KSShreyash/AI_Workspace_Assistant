@@ -96,6 +96,16 @@ async def schedule_action_item(
         raise HTTPException(status_code=502, detail="Failed to create the meeting. Please try again.")
 
     if updated is None:
-        raise HTTPException(status_code=409, detail="Microsoft account needs to be reconnected")
+        # create_meeting returns None for two reasons: no usable Microsoft
+        # mailbox, or one that needs reconnecting. Naming both beats asserting
+        # the wrong one - a Gmail-only user was previously told to reconnect a
+        # Microsoft account they had never connected.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Scheduling needs a connected Outlook mailbox. Connect or "
+                "reconnect one in Settings."
+            ),
+        )
 
     return _serialize(updated)

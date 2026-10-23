@@ -670,3 +670,112 @@ async def test_trivial_chat_messages_never_reach_the_model(pool, test_auth_user)
 
     assert len(seen) == 1, f"expected 1 substantive message, got {len(seen)}"
     assert "migration rollback" in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_the_sender_becomes_a_contact_even_when_the_model_names_nobody(pool, test_auth_user):
+    """Existence of a person is a fact from the headers, not a model opinion.
+
+    Contacts were only created from the model's `people` array. A small model
+    routinely returns that empty, so on real mail 127 distinct senders produced
+    exactly one contact - and action items referencing those people landed with
+    contact_id null, which also makes them unschedulable.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    result = {
+        "people": [],
+        "action_items": [
+            {
+                "text": "Send the deck",
+                "direction": "mine",
+                "due_date": None,
+                "participant_ref": "p0",
+                "category": "work",
+            }
+        ],
+    }
+
+    with patch("app.services.ai_extraction.openai_client.extract", return_value=result):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "content",
+            [("dana@example.com", "Dana")], own_email=email,
+        )
+
+    contact = await ContactsRepository(pool).get_by_email(user_id, "dana@example.com")
+    assert contact is not None, "the sender should exist as a contact"
+    assert contact["display_name"] == "Dana"
+
+    item = await pool.fetchrow(
+        "select contact_id from public.action_items where user_id = $1", user_id
+    )
+    assert item["contact_id"] == contact["id"], "the item should be attributed to them"
+
+
+@pytest.mark.asyncio
+async def test_model_notes_are_still_applied_when_it_does_describe_someone(pool, test_auth_user):
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    result = {
+        "people": [{"ref": "p0", "notes": "Runs the Northwind account"}],
+        "action_items": [],
+    }
+
+    with patch("app.services.ai_extraction.openai_client.extract", return_value=result):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "content",
+            [("dana@example.com", "Dana")], own_email=email,
+        )
+
+    contact = await ContactsRepository(pool).get_by_email(user_id, "dana@example.com")
+    assert contact["notes"] == "Runs the Northwind account"
+
+
+@pytest.mark.asyncio
+async def test_a_later_message_without_notes_does_not_erase_earlier_ones(pool, test_auth_user):
+    """Now that every participant is upserted on every message, the coalesce in
+    the repository is load-bearing rather than theoretical.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    with patch(
+        "app.services.ai_extraction.openai_client.extract",
+        return_value={"people": [{"ref": "p0", "notes": "Knows the roadmap"}], "action_items": []},
+    ):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "first",
+            [("dana@example.com", "Dana")], own_email=email,
+        )
+
+    with patch(
+        "app.services.ai_extraction.openai_client.extract",
+        return_value={"people": [], "action_items": []},
+    ):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "second",
+            [("dana@example.com", "Dana")], own_email=email,
+        )
+
+    contact = await ContactsRepository(pool).get_by_email(user_id, "dana@example.com")
+    assert contact["notes"] == "Knows the roadmap"
+
+
+@pytest.mark.asyncio
+async def test_the_user_themselves_never_becomes_a_contact(pool, test_auth_user):
+    """Mail the user sent themselves must not create a contact for them."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+
+    with patch(
+        "app.services.ai_extraction.openai_client.extract",
+        return_value={"people": [], "action_items": []},
+    ):
+        await _process_item(
+            pool, user_id, "email", uuid.uuid4(), "content",
+            [(email, "Me")], own_email=email,
+        )
+
+    assert await ContactsRepository(pool).count(user_id) == 0
