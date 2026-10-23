@@ -952,10 +952,15 @@ Plus one line in `README.md`.
 > | `.github/workflows/graph-sync-cron.yml` | `ai-workspace-assistant-api.onrender.com` |
 > | `render.yaml` | CORS origin `ai-workspace-assistant.pages.dev` |
 >
-> **These must match the names you actually create.** The Render service name decides
-> the hostname the cron calls, and the Pages project name decides the origin CORS
-> allows. The cron now uses `--fail-with-body` rather than `-sf`, so a mismatch shows
-> the response instead of a bare non-zero exit.
+> **These must match the names you actually create.** The Pages project name decides
+> the origin CORS allows, and the Render service name decides the hostname anything
+> calling the bulk-sync endpoint must use.
+>
+> **The scheduled sync was removed on 2026-10-16.** A GitHub Actions cron calling the
+> service every 15 minutes keeps a Render free instance awake continuously, consuming
+> essentially the whole ~750 instance-hour monthly allowance for the account. Sync is
+> now triggered on sign-in and by the "Sync now" button; `POST /api/sync/run` still
+> exists for any external scheduler.
 >
 > The GitHub repo name is cosmetic; GitHub redirects old remote URLs, so renaming it
 > is safe but optional.

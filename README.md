@@ -57,7 +57,7 @@ Sign in with Microsoft, and it does the rest: pulls your recent communications, 
 | LLM | OpenAI `gpt-4o-mini` | Structured extraction with strict JSON Schema |
 | Token refresh | MSAL (Python) | Redeems the stored refresh token for a new Graph access token |
 | Secrets at rest | Fernet (`cryptography`) | Graph tokens are encrypted before they touch Postgres |
-| Scheduling | GitHub Actions cron | Calls the bulk-sync endpoint every 15 minutes |
+| Scheduling | none by default | Sync is triggered on sign-in and by the **Sync now** button. See *Scheduling* below. |
 
 ## Architecture
 
@@ -146,7 +146,21 @@ Files: `backend/app/services/graph_sync.py`, `graph_client.py`, `graph_tokens_se
 
 **A delta query** is Graph's incremental sync: you save an opaque `deltaLink` URL, and hitting it later returns only what changed. A sync of an unchanged mailbox is nearly free instead of a full re-download.
 
-Two triggers: the GitHub Actions cron every 15 minutes (`POST /api/sync/run`, all connected users), and the dashboard's **Sync now** button (`POST /api/sync/run/me`, just you).
+Two triggers today, both user-initiated: a background task when you sign in, and
+the dashboard's **Sync now** button (`POST /api/sync/run/me`, just you).
+
+There is deliberately **no scheduled job**. A cron calling the service every 15
+minutes keeps a Render free-tier instance awake continuously, and the free plan
+allows roughly 750 instance-hours a month across the whole account — one
+always-on service consumes essentially all of it, leaving nothing for anything
+else you want to host. Letting the service sleep trades automatic background
+sync for that headroom.
+
+`POST /api/sync/run` (bulk, all users, guarded by `X-Sync-Secret`) still exists
+and still works. To schedule it again, point any external scheduler at it. If
+you do, prefer a few times a day over every 15 minutes: Render keeps an instance
+awake for ~15 minutes after each request, so four calls a day costs about an
+hour of uptime daily rather than twenty-four.
 
 ## How extraction works
 
@@ -207,7 +221,7 @@ Every route needs a valid Supabase JWT unless noted.
 | `POST /api/action-items/{id}/schedule` | Book the meeting on Microsoft Calendar |
 | `GET /api/search?q=` | Search contacts and action items together |
 | `POST /api/sync/run/me` | Sync just the current user |
-| `POST /api/sync/run` | **No JWT** — requires `X-Sync-Secret`, compared with `hmac.compare_digest`. Syncs every connected user. This is what the cron calls |
+| `POST /api/sync/run` | **No JWT** — requires `X-Sync-Secret`, compared with `hmac.compare_digest`. Syncs every connected user. Unscheduled by default; call it from an external scheduler if you want background sync |
 | `POST /api/extraction/run/me` | Run extraction for the current user, uncapped |
 | `GET /health` | Liveness, no auth |
 
@@ -299,7 +313,7 @@ Built test-first throughout (the plans in `docs/` show the sequence): a failing 
 
 **Why sync also runs extraction.** One scheduled trigger drives the whole pipeline instead of two jobs whose relative timing has to be reasoned about. The batch limit keeps any single run bounded even against a large backlog.
 
-**Why the bulk sync endpoint uses a shared secret.** There's no logged-in user in a cron job. The secret is compared with `hmac.compare_digest` so the comparison time doesn't leak the value.
+**Why the bulk sync endpoint uses a shared secret.** There's no logged-in user in a scheduled job, so there's no JWT to verify. The secret is compared with `hmac.compare_digest` so the comparison time doesn't leak the value.
 
 ## Known limitations
 
