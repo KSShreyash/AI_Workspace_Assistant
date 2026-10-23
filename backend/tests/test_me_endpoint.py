@@ -31,7 +31,12 @@ async def test_graph_status_returns_me_when_token_valid(pool, test_auth_user):
             response = await client.get("/api/me/graph-status")
 
     assert response.status_code == 200
-    assert response.json() == {"connected": True, "graph_me": {"mail": email}}
+    body = response.json()
+    # The response gained provider/email so the UI can name the right service;
+    # graph_me is retained for callers that already read it.
+    assert body["connected"] is True
+    assert body["provider"] == "microsoft"
+    assert body["graph_me"] == {"mail": email}
     account = await get_connected_account(pool, user_id)
     assert account["connection_status"] == "connected"
     app.dependency_overrides.clear()
@@ -146,3 +151,153 @@ async def test_graph_status_returns_502_on_other_graph_failure(pool, test_auth_u
 
     assert response.status_code == 502
     app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------
+# A Google-only user must never be told their Microsoft connection expired
+# --------------------------------------------------------------------------
+
+
+async def _connect_google_only(pool, user_id, email="person@gmail.com"):
+    """The only mailbox is Google, so it is also the primary one."""
+    await pool.execute("delete from public.connected_accounts where user_id = $1", user_id)
+    return await connect_account(
+        pool,
+        user_id=user_id,
+        provider="google",
+        provider_account_id="g-only",
+        email_address=email,
+        encrypted_access_token=encrypt_token("google-access"),
+        encrypted_refresh_token=encrypt_token("google-refresh"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        is_primary=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_never_sends_a_google_token_to_microsoft(pool, test_auth_user):
+    """The endpoint took whichever account was primary and called Graph with it.
+
+    With only a Gmail mailbox connected that account is primary, so a Google
+    token went to Microsoft, came back 401, and the user was told their
+    Microsoft connection had expired - having never connected Microsoft.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await _connect_google_only(pool, user_id)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+
+    try:
+        with patch("app.api.v1.me.get_me", new=AsyncMock()) as graph_me, patch(
+            "app.api.v1.me.gmail_profile", new=AsyncMock(return_value="42")
+        ):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get("/api/me/graph-status")
+
+        graph_me.assert_not_awaited()
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_google_mailbox_is_not_marked_needs_reauth(pool, test_auth_user):
+    """The real damage: list_syncable only returns 'connected' accounts, so a
+    mailbox wrongly flagged here stops syncing altogether.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await _connect_google_only(pool, user_id)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+
+    try:
+        with patch("app.api.v1.me.get_me", new=AsyncMock()), patch(
+            "app.api.v1.me.gmail_profile", new=AsyncMock(return_value="42")
+        ):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                await client.get("/api/me/graph-status")
+    finally:
+        app.dependency_overrides.clear()
+
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_status_reports_which_provider_it_checked(pool, test_auth_user):
+    """The UI said "Microsoft" unconditionally. It needs to be told."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await _connect_google_only(pool, user_id, email="person@gmail.com")
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+
+    try:
+        with patch("app.api.v1.me.gmail_profile", new=AsyncMock(return_value="42")):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                body = (await client.get("/api/me/graph-status")).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["provider"] == "google"
+    assert body["email"] == "person@gmail.com"
+
+
+@pytest.mark.asyncio
+async def test_a_revoked_google_mailbox_is_still_detected(pool, test_auth_user):
+    """Not calling Graph must not mean skipping the liveness check entirely -
+    the point of this endpoint is catching consent revoked out of band.
+    """
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await _connect_google_only(pool, user_id)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+
+    request = httpx.Request("GET", "https://gmail.googleapis.com/x")
+    unauthorised = httpx.HTTPStatusError(
+        "unauthorized", request=request, response=httpx.Response(401, request=request)
+    )
+
+    try:
+        with patch("app.api.v1.me.gmail_profile", new=AsyncMock(side_effect=unauthorised)):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get("/api/me/graph-status")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    account = await get_connected_account(pool, user_id)
+    assert account["connection_status"] == "needs_reauth"
+
+
+@pytest.mark.asyncio
+async def test_a_microsoft_primary_still_checks_graph(pool, test_auth_user):
+    """The existing behaviour must survive the fix."""
+    user_id, email = test_auth_user
+    await ProfilesRepository(pool).upsert(user_id, email)
+    await connect_account(
+        pool,
+        user_id=user_id,
+        encrypted_access_token=encrypt_token("valid-access"),
+        encrypted_refresh_token=encrypt_token("valid-refresh"),
+        access_token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=["Mail.Read"],
+        is_primary=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(user_id=user_id, email=email)
+
+    try:
+        with patch("app.api.v1.me.get_me", new=AsyncMock(return_value={"mail": email})) as graph_me:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                body = (await client.get("/api/me/graph-status")).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    graph_me.assert_awaited_once()
+    assert body["provider"] == "microsoft"
+    assert body["graph_me"] == {"mail": email}

@@ -16,7 +16,7 @@ import { CategoryDonut, type Categories } from '@/app/components/charts/Category
 type GraphStatus =
   | { state: 'loading' }
   | { state: 'connected'; email: string }
-  | { state: 'needs_reauth' }
+  | { state: 'needs_reauth'; provider: 'microsoft' | 'google' | null }
   | { state: 'error' }
 
 type ActivityEntry =
@@ -140,7 +140,10 @@ export default function DashboardPage() {
         return
       }
       if (response.status === 409) {
-        setStatus({ state: 'needs_reauth' })
+        // The body names which provider failed; a response without one leaves
+        // provider null and the copy stays generic.
+        const body = await response.json().catch(() => null)
+        setStatus({ state: 'needs_reauth', provider: body?.provider ?? null })
         return
       }
       if (!response.ok) {
@@ -225,12 +228,18 @@ export default function DashboardPage() {
   }
 
   if (status.state === 'needs_reauth') {
+    const label =
+      status.provider === 'google'
+        ? 'Google'
+        : status.provider === 'microsoft'
+          ? 'Microsoft'
+          : 'mailbox'
     return (
       <div className="p-8">
         <p className="text-[var(--color-fg)]">
-          Your Microsoft connection expired.{' '}
-          <a href="/login" className="text-[var(--color-accent)] hover:underline">
-            Reconnect your Microsoft account
+          {`Your ${label} connection expired. `}
+          <a href="/settings" className="text-[var(--color-accent)] hover:underline">
+            Reconnect it in Settings
           </a>
           .
         </p>

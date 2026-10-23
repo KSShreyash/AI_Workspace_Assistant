@@ -8,6 +8,7 @@ from app.core.deps import CurrentUser, get_current_user
 from app.db.session import get_pool
 from app.repositories.connected_accounts import ConnectedAccountsRepository
 from app.services.account_tokens import get_valid_access_token
+from app.services.gmail_client import current_history_id as gmail_profile
 from app.services.graph_client import get_me
 
 logger = logging.getLogger(__name__)
@@ -88,11 +89,19 @@ async def set_primary_account(
 
 @router.get("/graph-status")
 async def graph_status(current_user: CurrentUser = Depends(get_current_user)):
-    """Liveness of the primary account, confirmed against the provider.
+    """Liveness of the primary mailbox, confirmed against its own provider.
 
     Kept distinct from /accounts, which reads stored state: this one actually
     calls the provider, so it detects consent revoked out-of-band rather than
     reporting the last thing we happened to write down.
+
+    It must ask the provider that issued the token. This previously called
+    Microsoft Graph for whatever account was primary - so a user whose only
+    mailbox was Gmail had a Google token sent to Microsoft, got a 401, was told
+    their "Microsoft connection expired" having never connected Microsoft, and,
+    worse, had that healthy mailbox written to needs_reauth. list_syncable only
+    returns connected accounts, so one visit to the dashboard silently stopped
+    it syncing.
     """
     pool = await get_pool()
     accounts = ConnectedAccountsRepository(pool)
@@ -105,11 +114,22 @@ async def graph_status(current_user: CurrentUser = Depends(get_current_user)):
     if access_token is None:
         raise HTTPException(status_code=409, detail="needs_reauth")
 
+    provider = account["provider"]
+    graph_me: dict | None = None
+
     try:
-        graph_me = await get_me(access_token)
+        if provider == "microsoft":
+            graph_me = await get_me(access_token)
+            email = graph_me.get("mail") or graph_me.get("userPrincipalName")
+        else:
+            # Gmail's profile endpoint is the cheapest call that proves the
+            # token still works; the address we already hold is authoritative.
+            await gmail_profile(access_token)
+            email = account["email_address"]
     except httpx.HTTPStatusError as exc:
         logger.error(
-            "Graph /me failed for account %s: status=%s body=%s",
+            "%s liveness check failed for account %s: status=%s body=%s",
+            provider,
             account["id"],
             exc.response.status_code,
             exc.response.text,
@@ -117,7 +137,13 @@ async def graph_status(current_user: CurrentUser = Depends(get_current_user)):
         if exc.response.status_code == 401:
             await accounts.set_status(current_user.user_id, account["id"], "needs_reauth")
             raise HTTPException(status_code=409, detail="needs_reauth")
-        raise HTTPException(status_code=502, detail="graph_me_failed")
+        raise HTTPException(status_code=502, detail="liveness_check_failed")
 
     await accounts.set_status(current_user.user_id, account["id"], "connected")
-    return {"connected": True, "graph_me": graph_me}
+    return {
+        "connected": True,
+        "provider": provider,
+        "email": email,
+        # Retained for the Microsoft path, which callers already read.
+        "graph_me": graph_me if graph_me is not None else {"mail": email},
+    }

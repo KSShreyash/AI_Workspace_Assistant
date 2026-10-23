@@ -84,7 +84,27 @@ describe('DashboardPage', () => {
     expect(screen.getByText(/updated contact: helen/i)).toBeInTheDocument()
   })
 
-  it('shows a reconnect prompt on 409 needs_reauth', async () => {
+  it('names the provider that actually expired, not Microsoft by default', async () => {
+    // The copy used to say "Microsoft" unconditionally, so a user whose only
+    // mailbox was Gmail was told their Microsoft connection had expired -
+    // having never connected Microsoft at all.
+    apiFetchMock.mockImplementation((path: string) => {
+      if (path === '/api/me/graph-status') {
+        return Promise.resolve(jsonResponse({ provider: 'google' }, 409))
+      }
+      if (path === '/api/action-items?include_done=true') {
+        return Promise.resolve(jsonResponse(ACTION_ITEMS_BODY))
+      }
+      return Promise.resolve(jsonResponse(DASHBOARD_BODY))
+    })
+
+    render(<DashboardPage />)
+
+    await waitFor(() => expect(screen.getByText(/google connection expired/i)).toBeInTheDocument())
+    expect(screen.queryByText(/microsoft/i)).not.toBeInTheDocument()
+  })
+
+  it('falls back to neutral copy when the provider is unknown', async () => {
     apiFetchMock.mockImplementation((path: string) => {
       if (path === '/api/me/graph-status') {
         return Promise.resolve(new Response(null, { status: 409 }))
@@ -98,7 +118,7 @@ describe('DashboardPage', () => {
     render(<DashboardPage />)
 
     await waitFor(() =>
-      expect(screen.getByText(/reconnect your microsoft account/i)).toBeInTheDocument()
+      expect(screen.getByText(/mailbox connection expired/i)).toBeInTheDocument()
     )
   })
 
